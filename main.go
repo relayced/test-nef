@@ -158,6 +158,12 @@ var (
 	enableRejoin    bool
 	activePackages  []string
 
+	enableHardwareSpoof = true
+	isVirtualDetected   = false
+	virtualDeviceName   = ""
+	enableAutoBoot      = true
+	isAutoStartMode     = false
+
 	serverPlaceID  string
 	serverGameName string
 
@@ -1457,6 +1463,81 @@ func saveDiscordMention(mention string) {
 	_ = os.WriteFile(mentionPath, []byte(mention), 0600)
 }
 
+type SavedSessionConfig struct {
+	CloneCount          int               `json:"clone_count"`
+	GameName            string            `json:"game_name"`
+	GameURL             string            `json:"game_url"`
+	CloneConfigs        []CloneGameConfig `json:"clone_configs"`
+	EnableRejoin        bool              `json:"enable_rejoin"`
+	CleanMode           CleanMode         `json:"clean_mode"`
+	DiscordWebhook      string            `json:"discord_webhook"`
+	DiscordMention      string            `json:"discord_mention"`
+	EnableHardwareSpoof bool              `json:"enable_hardware_spoof"`
+	EnableAutoBoot      bool              `json:"enable_auto_boot"`
+}
+
+func getSessionConfigPath() string {
+	return filepath.Join(getHomeDir(), ".nefhub_config.json")
+}
+
+func saveSessionConfig() {
+	cfg := SavedSessionConfig{
+		CloneCount:          cloneCount,
+		GameName:            gameName,
+		GameURL:             gameURL,
+		CloneConfigs:        cloneGameConfigs,
+		EnableRejoin:        enableRejoin,
+		CleanMode:           cleanMode,
+		DiscordWebhook:      discordWebhook,
+		DiscordMention:      discordMention,
+		EnableHardwareSpoof: enableHardwareSpoof,
+		EnableAutoBoot:      enableAutoBoot,
+	}
+	if data, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+		_ = os.WriteFile(getSessionConfigPath(), data, 0600)
+	}
+}
+
+func loadSessionConfig() (SavedSessionConfig, bool) {
+	var cfg SavedSessionConfig
+	data, err := os.ReadFile(getSessionConfigPath())
+	if err != nil {
+		return cfg, false
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil || cfg.CloneCount <= 0 {
+		return cfg, false
+	}
+	return cfg, true
+}
+
+func installTermuxBootHook(enable bool) {
+	bootDir := filepath.Join(getHomeDir(), ".termux", "boot")
+	hookPath := filepath.Join(bootDir, "start-nefhub.sh")
+
+	if !enable {
+		_ = os.Remove(hookPath)
+		return
+	}
+
+	_ = os.MkdirAll(bootDir, 0755)
+
+	hookContent := `#!/data/data/com.termux/files/usr/bin/bash
+# Nefarious Hub Termux:Boot Auto-Launcher
+# Automatically resumes multi-clone farming upon phone reboot.
+termux-wake-lock 2>/dev/null || true
+sleep 10
+cd "$HOME"
+export NEF_AUTO_START=1
+if [ -f "./nefhub.sh" ]; then
+    bash ./nefhub.sh --auto > "$HOME/nefhub_boot.log" 2>&1 &
+elif [ -f "./nefhub" ]; then
+    ./nefhub --auto > "$HOME/nefhub_boot.log" 2>&1 &
+fi
+`
+	_ = os.WriteFile(hookPath, []byte(hookContent), 0755)
+	_ = exec.Command("chmod", "+x", hookPath).Run()
+}
+
 // Discord Webhook Payload with Rich Embeds, Fields, and Banners
 type DiscordEmbedField struct {
 	Name   string `json:"name"`
@@ -1705,6 +1786,8 @@ func sendSessionStartWebhook() {
 		{Name: "📱 Active Instances", Value: fmt.Sprintf("`%d Clone%s Online`", cloneCount, plural(cloneCount)), Inline: true},
 		{Name: "🛡️ Sentinel Guard", Value: "`ACTIVE (24/7 Watchdog)`", Inline: true},
 		{Name: "🧹 System Optimizer", Value: fmt.Sprintf("`%s (+%d MB Freed)`", cleanedModeDesc, cleanedRAMFreedMB), Inline: true},
+		{Name: "🎭 Anti-VM Spoofing", Value: func() string { if enableHardwareSpoof { return "`ACTIVE (Samsung S23 Cloak)`" } else { return "`DISABLED`" } }(), Inline: true},
+		{Name: "🔄 Auto-Boot (Reboot)", Value: func() string { if enableAutoBoot { return "`ENABLED (Termux:Boot)`" } else { return "`DISABLED`" } }(), Inline: true},
 		{Name: "💾 System Memory", Value: fmt.Sprintf("%.1f / %.1f GB (%.0f%% Used)", res.UsedRAMGB, res.TotalRAMGB, res.RAMUsagePercent), Inline: false},
 		{Name: "⚡ CPU Cores & Load", Value: fmt.Sprintf("%.1f%% (%d Cores)", res.CPUUsagePercent, res.CPUCores), Inline: true},
 		{Name: "🕒 Started At", Value: time.Now().Format("2006-01-02 15:04:05"), Inline: true},
@@ -1853,6 +1936,133 @@ func startTelemetrySampler() {
 // HARDWARE ID & DEVICE INTEGRITY
 // ============================================================================
 
+// SpoofedProfile represents a persistent, realistic physical Samsung Galaxy S23 profile.
+type SpoofedProfile struct {
+	AndroidID    string `json:"android_id"`
+	Model        string `json:"model"`
+	Brand        string `json:"brand"`
+	Manufacturer string `json:"manufacturer"`
+	Device       string `json:"device"`
+	Board        string `json:"board"`
+	Hardware     string `json:"hardware"`
+	Serial       string `json:"serial"`
+}
+
+func getSpoofedProfilePath() string {
+	return filepath.Join(getHomeDir(), ".nefhub_spoofed_device.json")
+}
+
+func randHex(n int) string {
+	bytes := make([]byte, n)
+	t := time.Now().UnixNano()
+	for i := range bytes {
+		t = t*1103515245 + 12345
+		bytes[i] = byte(t >> 16)
+	}
+	return fmt.Sprintf("%x", bytes)
+}
+
+func loadOrCreateSpoofedProfile() SpoofedProfile {
+	path := getSpoofedProfilePath()
+	var prof SpoofedProfile
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, &prof); err == nil && prof.AndroidID != "" {
+			return prof
+		}
+	}
+
+	prof = SpoofedProfile{
+		AndroidID:    randHex(8), // 16 hex chars
+		Model:        "SM-S911B",
+		Brand:        "samsung",
+		Manufacturer: "samsung",
+		Device:       "dm1q",
+		Board:        "kalama",
+		Hardware:     "qcom",
+		Serial:       "R5CW" + strings.ToUpper(randHex(4)),
+	}
+
+	if data, err := json.MarshalIndent(prof, "", "  "); err == nil {
+		_ = os.WriteFile(path, data, 0600)
+	}
+	return prof
+}
+
+func detectVirtualDevice() (bool, string) {
+	readProp := func(key string) string {
+		out, err := exec.Command("getprop", key).Output()
+		if err != nil {
+			return ""
+		}
+		return strings.ToLower(strings.TrimSpace(string(out)))
+	}
+
+	if readProp("ro.kernel.qemu") == "1" {
+		return true, "QEMU Virtual Emulator"
+	}
+
+	hw := readProp("ro.hardware")
+	for _, v := range []string{"goldfish", "ranchu", "vmos", "vphone", "nox", "ttvm", "android_x86", "vbox"} {
+		if strings.Contains(hw, v) {
+			return true, fmt.Sprintf("Virtual Hardware (%s)", hw)
+		}
+	}
+
+	model := readProp("ro.product.model")
+	for _, v := range []string{"vmos", "vphone", "sdk", "emulator", "genymotion", "nox", "bluestacks", "redfinger", "droid4x", "ldplayer"} {
+		if strings.Contains(model, v) {
+			return true, fmt.Sprintf("Virtual Device (%s)", model)
+		}
+	}
+
+	flavor := readProp("ro.build.flavor")
+	if strings.Contains(flavor, "vmos") || strings.Contains(flavor, "vphone") {
+		return true, "VMOS/VPhone Virtual Space"
+	}
+
+	vmFiles := []string{
+		"/dev/qemu_pipe",
+		"/dev/socket/qemud",
+		"/system/bin/nox-prop",
+		"/system/bin/androVM-prop",
+		"/data/data/com.vmos.app",
+		"/data/data/com.vmos.pro",
+	}
+	for _, f := range vmFiles {
+		if _, err := os.Stat(f); err == nil {
+			return true, "Virtual File Descriptor (" + filepath.Base(f) + ")"
+		}
+	}
+
+	return false, ""
+}
+
+func applyHardwareSpoofing() {
+	prof := loadOrCreateSpoofedProfile()
+
+	if checkRoot() {
+		setProp := func(k, v string) {
+			_ = exec.Command("su", "-c", fmt.Sprintf("resetprop %s '%s' 2>/dev/null || setprop %s '%s'", k, v, k, v)).Run()
+		}
+		setProp("ro.kernel.qemu", "0")
+		setProp("ro.product.model", prof.Model)
+		setProp("ro.product.brand", prof.Brand)
+		setProp("ro.product.manufacturer", prof.Manufacturer)
+		setProp("ro.product.device", prof.Device)
+		setProp("ro.product.board", prof.Board)
+		setProp("ro.hardware", prof.Hardware)
+		setProp("ro.boot.hardware", prof.Hardware)
+		setProp("ro.serialno", prof.Serial)
+
+		_ = exec.Command("su", "-c", fmt.Sprintf("settings put secure android_id %s", prof.AndroidID)).Run()
+	}
+
+	spoofData := fmt.Sprintf("MODEL=%s|BRAND=%s|MANUFACTURER=%s|BOARD=%s|HARDWARE=%s|SERIAL=%s|ANDROID_ID=%s\n",
+		prof.Model, prof.Brand, prof.Manufacturer, prof.Board, prof.Hardware, prof.Serial, prof.AndroidID)
+	_ = os.WriteFile("/sdcard/nefarious_device_spoof.txt", []byte(spoofData), 0644)
+	_ = os.WriteFile("/sdcard/Delta/nefarious_device_spoof.txt", []byte(spoofData), 0644)
+}
+
 func getDeviceHWID() string {
 	readCmd := func(name string, args ...string) string {
 		out, err := exec.Command(name, args...).Output()
@@ -1866,6 +2076,16 @@ func getDeviceHWID() string {
 	model := readCmd("getprop", "ro.product.model")
 	build := readCmd("getprop", "ro.build.id")
 	serial := readCmd("getprop", "ro.serialno")
+
+	if enableHardwareSpoof {
+		prof := loadOrCreateSpoofedProfile()
+		aid = prof.AndroidID
+		model = prof.Model
+		serial = prof.Serial
+		if build == "" {
+			build = "TP1A.220624.014"
+		}
+	}
 
 	raw := fmt.Sprintf("%s_%s_%s_%s", aid, model, build, serial)
 	if aid == "" && model == "" {
@@ -2863,6 +3083,37 @@ func drawSummaryCard() {
 		LabelColor: Gray,
 		Value:      optimizerVal,
 		ValueColor: optimizerColor,
+	})
+
+	antiVMVal := "ACTIVE (Samsung S23)"
+	antiVMCol := Green
+	if !enableHardwareSpoof {
+		antiVMVal = "DISABLED (Native)"
+		antiVMCol = Dark
+	} else if isVirtualDetected {
+		antiVMVal = fmt.Sprintf("CLOAKED (%s)", virtualDeviceName)
+		antiVMCol = Green
+	}
+	rows = append(rows, BoxRow{
+		Type:       RowStatus,
+		Label:      "Anti-VM   : ",
+		LabelColor: Gray,
+		Value:      antiVMVal,
+		ValueColor: antiVMCol,
+	})
+
+	bootVal := "ENABLED (Termux:Boot)"
+	bootCol := Green
+	if !enableAutoBoot {
+		bootVal = "DISABLED (Manual)"
+		bootCol = Dark
+	}
+	rows = append(rows, BoxRow{
+		Type:       RowStatus,
+		Label:      "Auto-Boot : ",
+		LabelColor: Gray,
+		Value:      bootVal,
+		ValueColor: bootCol,
 	})
 
 
@@ -4693,6 +4944,145 @@ func optimizeSystemAndCleanApps(mode CleanMode) (freedMB int, appsClosed int) {
 	return freedMB, appsClosed
 }
 
+func configureHardwareSpoofing() {
+	drainInput()
+	pad := getMenuLeftPad()
+	isVirtualDetected, virtualDeviceName = detectVirtualDevice()
+
+	var rows []BoxRow
+	rows = append(rows, BoxRow{
+		Type:        RowSubtitle,
+		CustomText:  "Camouflage virtual devices & spoof physical HWID.",
+		CustomColor: White,
+	})
+
+	if isVirtualDetected {
+		rows = append(rows, BoxRow{
+			Type:        RowSubtitle,
+			CustomText:  fmt.Sprintf("⚠️ Detected: %s", virtualDeviceName),
+			CustomColor: Amber,
+		})
+	} else {
+		rows = append(rows, BoxRow{
+			Type:        RowSubtitle,
+			CustomText:  "Status: Physical Android Environment",
+			CustomColor: Green,
+		})
+	}
+
+	rows = append(rows,
+		BoxRow{Type: RowSeparator},
+		BoxRow{
+			Type:       RowKeyValue,
+			Label:      "[1] Enable Spoofing ",
+			LabelColor: Green,
+			Value:      "Disguise as Samsung Galaxy S23 (SM-S911B)",
+			ValueColor: Green,
+		},
+		BoxRow{
+			Type:       RowKeyValue,
+			Label:      "[2] Native Device   ",
+			LabelColor: White,
+			Value:      "Expose true hardware properties & serial",
+			ValueColor: Dim,
+		},
+		BoxRow{Type: RowSeparator},
+		BoxRow{
+			Type:        RowSubtitle,
+			CustomText:  "Protects VMOS, VPhone, cloud phones & emulators from detection.",
+			CustomColor: Dim,
+		},
+		BoxRow{
+			Type:        RowSubtitle,
+			CustomText:  "Tip: Press [ENTER] to enable Spoofing (Recommended)",
+			CustomColor: Green,
+		},
+	)
+
+	drawStepCard("6. HARDWARE & ANTI-VM SPOOFING", "Virtual Device Cloaking & Camouflage", rows)
+	fmt.Printf("%s› Selection [1-2] (default: 1): %s", pad+White, NC)
+
+	for {
+		choice := strings.TrimSpace(readLine())
+		if choice == "" || choice == "1" {
+			enableHardwareSpoof = true
+			break
+		} else if choice == "2" {
+			enableHardwareSpoof = false
+			break
+		}
+		fmt.Printf("%s%sPlease enter 1 or 2: %s", pad, Red, NC)
+	}
+
+	if enableHardwareSpoof {
+		applyHardwareSpoofing()
+		myHWID = getDeviceHWID()
+	}
+}
+
+func configureAutoBoot() {
+	drainInput()
+	pad := getMenuLeftPad()
+
+	rows := []BoxRow{
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Auto-start Nefarious Hub when the device reboots.",
+			CustomColor: White,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Requires the Termux:Boot companion application.",
+			CustomColor: Dim,
+		},
+		BoxRow{Type: RowSeparator},
+		{
+			Type:       RowKeyValue,
+			Label:      "[1] Enable Auto-Boot ",
+			LabelColor: Green,
+			Value:      "Auto-resume clones on phone restart",
+			ValueColor: Green,
+		},
+		{
+			Type:       RowKeyValue,
+			Label:      "[2] Manual Start     ",
+			LabelColor: White,
+			Value:      "Launch manually via terminal each time",
+			ValueColor: Dim,
+		},
+		BoxRow{Type: RowSeparator},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Saves your session profile to ~/.nefhub_config.json",
+			CustomColor: Dim,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Tip: Press [ENTER] to Enable Auto-Boot (Recommended)",
+			CustomColor: Green,
+		},
+	}
+
+	drawStepCard("7. AUTO-START ON REBOOT", "Termux:Boot 24/7 Unattended Recovery", rows)
+	fmt.Printf("%s› Selection [1-2] (default: 1): %s", pad+White, NC)
+
+	for {
+		choice := strings.TrimSpace(readLine())
+		if choice == "" || choice == "1" {
+			enableAutoBoot = true
+			installTermuxBootHook(true)
+			break
+		} else if choice == "2" {
+			enableAutoBoot = false
+			installTermuxBootHook(false)
+			break
+		}
+		fmt.Printf("%s%sPlease enter 1 or 2: %s", pad, Red, NC)
+	}
+
+	saveSessionConfig()
+}
+
 // ============================================================================
 // INSTANCE LAUNCH & ORCHESTRATION
 // ============================================================================
@@ -5735,9 +6125,22 @@ func main() {
 		os.Exit(0)
 	}()
 
+	for _, arg := range os.Args[1:] {
+		if arg == "--auto" || arg == "--quick" || arg == "-y" {
+			isAutoStartMode = true
+		}
+	}
+	if os.Getenv("NEF_AUTO_START") == "1" {
+		isAutoStartMode = true
+	}
+
 	initResizeWatcher()
 	initInputReader()
 
+	isVirtualDetected, virtualDeviceName = detectVirtualDevice()
+	if enableHardwareSpoof {
+		applyHardwareSpoofing()
+	}
 	myHWID = getDeviceHWID()
 
 	drawBanner()
@@ -5745,12 +6148,94 @@ func main() {
 	checkUpdates()
 	verifyLicense()
 
+	if isAutoStartMode {
+		cfg, ok := loadSessionConfig()
+		if ok && cfg.CloneCount > 0 {
+			cloneCount = cfg.CloneCount
+			if cloneCount > len(allPackages) {
+				cloneCount = len(allPackages)
+			}
+			activePackages = allPackages[:cloneCount]
+			gameName = cfg.GameName
+			gameURL = cfg.GameURL
+			cloneGameConfigs = cfg.CloneConfigs
+			enableRejoin = cfg.EnableRejoin
+			cleanMode = cfg.CleanMode
+			discordWebhook = cfg.DiscordWebhook
+			discordMention = cfg.DiscordMention
+			enableHardwareSpoof = cfg.EnableHardwareSpoof
+			enableAutoBoot = cfg.EnableAutoBoot
+
+			if enableHardwareSpoof {
+				applyHardwareSpoofing()
+				myHWID = getDeviceHWID()
+			}
+
+			pad := getMenuLeftPad()
+			fmt.Printf("\n%s%s⚡ AUTO-BOOT TRIGGERED (Termux:Boot Mode)%s\n", pad, Bold+Cyan, NC)
+			fmt.Printf("%s%sProfile: %d Clones | Game: %s | Anti-VM: %v%s\n", pad, White, cloneCount, gameName, enableHardwareSpoof, NC)
+			fmt.Printf("%s%sAuto-starting in 5 seconds... (Press [ENTER] to cancel auto-boot)%s\n\n", pad, Amber, NC)
+
+			cancelled := false
+			for sec := 5; sec > 0; sec-- {
+				fmt.Printf("\r%s%s[AUTO-LAUNCH] Booting in %d seconds...%s", pad, Cyan, sec, NC)
+				line, hasInput := readLineWithTimeout(1 * time.Second)
+				if hasInput && line != "" {
+					cancelled = true
+					break
+				}
+			}
+			fmt.Println()
+
+			if !cancelled {
+				drawBanner()
+				drawSummaryCard()
+				fmt.Println()
+
+				hideSoftKeyboard()
+				launched := launchInitialInstances()
+				hideSoftKeyboard()
+
+				if !launched {
+					return
+				}
+
+				setDashboardStatus("Monitoring 24/7 (Auto-Rejoin)", Green)
+				dashboardMu.Lock()
+				isMonitoringActive = true
+				dashboardMu.Unlock()
+				drawSummaryCard()
+				hideSoftKeyboard()
+				sendSessionStartWebhook()
+
+				if enableRejoin {
+					go startLocalBridgeServer()
+					go startCloudSignalPoller()
+					go startEventLogWatcher()
+					go startKickSignalWatcher()
+					go startNetworkMonitor()
+					go startResourceMonitor()
+					go startTelemetrySampler()
+					go startDeltaUpdatePoller()
+					startSentinelMonitor()
+				} else {
+					select {}
+				}
+				return
+			}
+			fmt.Printf("%s%sAuto-boot cancelled. Entering interactive setup...%s\n", pad, White, NC)
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 	drawBanner()
 	configureConcurrency()
 	configureTargetExperience()
 	configureSentinel()
 	configureWebhook()
 	configureSystemOptimizer()
+	configureHardwareSpoofing()
+	configureAutoBoot()
 
 	drawBanner()
 	drawSummaryCard()

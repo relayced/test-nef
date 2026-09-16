@@ -1,6 +1,8 @@
 1.4.4
 
 [New Functions & Features]
++ Added detectVirtualDevice() & applyHardwareSpoofing() Anti-VM and Samsung Galaxy S23 hardware camouflage
++ Added installTermuxBootHook() & saveSessionConfig() Termux:Boot auto-start upon phone restart
 + Added pickPopularGame() pre-configured game preset selector with 12 popular Roblox experiences
 + Added configureSystemOptimizer() interactive wizard step [1-3] for Deep Clean, Light Clean, or Skip
 + Added optimizeSystemAndCleanApps() 3-stage memory reclamation, cache flush & background app killer
