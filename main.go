@@ -27,7 +27,6 @@ import (
 
 const (
 	ScriptVersion = "1.4.4"
-	VersionURL    = "https://raw.githubusercontent.com/relayced/Hexagon/main/version.txt"
 	LogFileName   = "farming_log.txt"
 
 	DeltaDownloadURL    = "https://delta.filenetwork.vip/android.html"
@@ -45,6 +44,14 @@ const (
 	WRAP_LONG_VALUES            = true
 	SHORTEN_LONG_VALUES         = true
 )
+
+var VersionURL = func() string {
+	repo := os.Getenv("NEF_REPO")
+	if repo == "" {
+		repo = "relayced/test-nef"
+	}
+	return fmt.Sprintf("https://raw.githubusercontent.com/%s/main/version.txt", repo)
+}()
 
 // ANSI Color Palette
 const (
@@ -67,6 +74,74 @@ var allPackages = []string{
 	"com.roblox.cliene",
 	"com.roblox.clienf",
 	"com.roblox.clieng",
+}
+
+// CleanMode defines the depth of pre-launch system optimization.
+type CleanMode int
+
+const (
+	CleanModeDeep CleanMode = iota // Kill safe background apps + flush caches + compact RAM
+	CleanModeLight                 // Purge stale clones + flush caches only
+	CleanModeNone                  // Skip
+)
+
+var (
+	cleanMode         = CleanModeDeep
+	cleanedRAMFreedMB int
+	cleanedAppsCount  int
+	cleanedModeDesc   = "Deep Clean"
+)
+
+var protectedPackagePrefixes = []string{
+	"com.termux",
+	"com.topjohnwu.magisk",
+	"io.github.a13e300.ksu",
+	"me.weishu.kernelsu",
+	"io.github.vvb2060.magisk",
+	"org.lsposed.manager",
+	"android",
+	"com.android.systemui",
+	"com.android.phone",
+	"com.android.server.telecom",
+	"com.google.android.gms",
+	"com.google.android.gsf",
+	"com.google.android.vending",
+	"com.google.android.inputmethod.latin",
+	"com.touchtype.swiftkey",
+	"com.samsung.android.honeyboard",
+	"com.android.inputmethod.latin",
+}
+
+var commonHeavyPackages = []string{
+	"com.android.chrome",
+	"com.google.android.youtube",
+	"com.google.android.apps.youtube.music",
+	"com.zhiliaoapp.musically",
+	"com.ss.android.ugc.trill",
+	"com.facebook.katana",
+	"com.facebook.orca",
+	"com.instagram.android",
+	"com.twitter.android",
+	"tv.twitch.android",
+	"com.netflix.mediaclient",
+	"com.spotify.music",
+	"org.mozilla.firefox",
+	"com.microsoft.emmx",
+	"com.opera.browser",
+	"com.brave.browser",
+	"com.sec.android.app.sbrowser",
+	"com.snapchat.android",
+	"com.reddit.frontpage",
+	"com.discord",
+}
+
+func isProtectedPackage(pkg string) bool {
+	for _, prefix := range protectedPackagePrefixes {
+		if strings.HasPrefix(pkg, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Global runtime configurations
@@ -1623,6 +1698,7 @@ func sendSessionStartWebhook() {
 		{Name: "🎮 Target Experience", Value: func() string { if len(cloneGameConfigs) > 1 { var names []string; for _, c := range cloneGameConfigs { names = append(names, c.Name) }; unique := map[string]bool{}; var uniq []string; for _, n := range names { if !unique[n] { unique[n] = true; uniq = append(uniq, n) } }; if len(uniq) > 1 { return "`Mixed: " + strings.Join(uniq, " / ") + "`" } }; return fmt.Sprintf("`%s`", gameName) }(), Inline: true},
 		{Name: "📱 Active Instances", Value: fmt.Sprintf("`%d Clone%s Online`", cloneCount, plural(cloneCount)), Inline: true},
 		{Name: "🛡️ Sentinel Guard", Value: "`ACTIVE (24/7 Watchdog)`", Inline: true},
+		{Name: "🧹 System Optimizer", Value: fmt.Sprintf("`%s (+%d MB Freed)`", cleanedModeDesc, cleanedRAMFreedMB), Inline: true},
 		{Name: "💾 System Memory", Value: fmt.Sprintf("%.1f / %.1f GB (%.0f%% Used)", res.UsedRAMGB, res.TotalRAMGB, res.RAMUsagePercent), Inline: false},
 		{Name: "⚡ CPU Cores & Load", Value: fmt.Sprintf("%.1f%% (%d Cores)", res.CPUUsagePercent, res.CPUCores), Inline: true},
 		{Name: "🕒 Started At", Value: time.Now().Format("2006-01-02 15:04:05"), Inline: true},
@@ -2761,6 +2837,26 @@ func drawSummaryCard() {
 		LabelColor: Gray,
 		Value:      discordVal,
 		ValueColor: discordColor,
+	})
+
+	optimizerVal := "DEEP CLEAN"
+	optimizerColor := Green
+	if cleanMode == CleanModeLight {
+		optimizerVal = "LIGHT CLEAN"
+		optimizerColor = Amber
+	} else if cleanMode == CleanModeNone {
+		optimizerVal = "DISABLED"
+		optimizerColor = Dark
+	}
+	if cleanedRAMFreedMB > 0 {
+		optimizerVal = fmt.Sprintf("%s (+%d MB Freed)", optimizerVal, cleanedRAMFreedMB)
+	}
+	rows = append(rows, BoxRow{
+		Type:       RowStatus,
+		Label:      "Optimizer : ",
+		LabelColor: Gray,
+		Value:      optimizerVal,
+		ValueColor: optimizerColor,
 	})
 
 
@@ -4361,6 +4457,156 @@ func configureWebhook() {
 	}
 }
 
+func configureSystemOptimizer() {
+	drainInput()
+	pad := getMenuLeftPad()
+	res := getSystemResources()
+
+	rows := []BoxRow{
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Reclaim RAM & CPU by closing unnecessary background apps.",
+			CustomColor: White,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  fmt.Sprintf("Current Available RAM: %.1f GB / %.1f GB Total", res.AvailableRAMGB, res.TotalRAMGB),
+			CustomColor: Cyan,
+		},
+		BoxRow{Type: RowSeparator},
+		{
+			Type:       RowKeyValue,
+			Label:      "[1] Deep Clean  ",
+			LabelColor: Green,
+			Value:      "Close Background Apps + Flush Cache & Defrag RAM",
+			ValueColor: Green,
+		},
+		{
+			Type:       RowKeyValue,
+			Label:      "[2] Light Clean ",
+			LabelColor: White,
+			Value:      "Purge Stale Clones + Flush Kernel Caches Only",
+			ValueColor: Dim,
+		},
+		{
+			Type:       RowKeyValue,
+			Label:      "[3] Skip        ",
+			LabelColor: White,
+			Value:      "Keep all background apps running as-is",
+			ValueColor: Dim,
+		},
+		BoxRow{Type: RowSeparator},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Protected: Termux, Magisk/KernelSU, System UI & Keyboards",
+			CustomColor: Dim,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Tip: Press [ENTER] for Deep Clean (Recommended)",
+			CustomColor: Green,
+		},
+	}
+
+	drawStepCard("5. SYSTEM OPTIMIZER & CLEANUP", "Reclaim RAM & CPU for Roblox Clones", rows)
+	fmt.Printf("%s› Selection [1-3] (default: 1): %s", pad+White, NC)
+
+	for {
+		choice := strings.TrimSpace(readLine())
+		if choice == "" || choice == "1" {
+			cleanMode = CleanModeDeep
+			cleanedModeDesc = "Deep Clean"
+			break
+		} else if choice == "2" {
+			cleanMode = CleanModeLight
+			cleanedModeDesc = "Light Clean"
+			break
+		} else if choice == "3" {
+			cleanMode = CleanModeNone
+			cleanedModeDesc = "Disabled"
+			break
+		}
+		fmt.Printf("%s%sPlease enter 1, 2, or 3: %s", pad, Red, NC)
+	}
+}
+
+func optimizeSystemAndCleanApps(mode CleanMode) (freedMB int, appsClosed int) {
+	if mode == CleanModeNone {
+		return 0, 0
+	}
+
+	resPre := getSystemResources()
+	preAvailMB := resPre.AvailableRAMMB
+
+	// Stage 1: Purge stale or lingering Roblox clones & temporary signal files
+	for _, pkg := range allPackages {
+		_ = exec.Command("am", "force-stop", pkg).Run()
+		if checkRoot() {
+			_ = exec.Command("su", "-c", "am force-stop "+pkg).Run()
+		}
+	}
+	_ = os.Remove("/sdcard/nefarious_active_clone.txt")
+	_ = os.Remove("/sdcard/nefarious_kick_signal.txt")
+	_ = os.Remove("/sdcard/nefarious_events.log")
+
+	// Stage 2: Deep background app termination
+	if mode == CleanModeDeep {
+		// Run Android native am kill-all (kills all safe background processes)
+		if checkRoot() {
+			_ = exec.Command("su", "-c", "am kill-all").Run()
+		} else {
+			_ = exec.Command("am", "kill-all").Run()
+		}
+		appsClosed++
+
+		// Explicitly terminate common heavy resource-hogging background apps
+		for _, pkg := range commonHeavyPackages {
+			if isProtectedPackage(pkg) {
+				continue
+			}
+			var err error
+			if checkRoot() {
+				err = exec.Command("su", "-c", "am force-stop "+pkg).Run()
+			} else {
+				err = exec.Command("am", "force-stop", pkg).Run()
+			}
+			if err == nil {
+				appsClosed++
+			}
+		}
+	}
+
+	// Stage 3: Flush kernel page caches & compact memory fragmentation
+	if checkRoot() {
+		_ = exec.Command("su", "-c", "echo 3 > /proc/sys/vm/drop_caches").Run()
+		_ = exec.Command("su", "-c", "echo 1 > /proc/sys/vm/compact_memory").Run()
+		_ = exec.Command("su", "-c", "pm trim-caches 999999999").Run()
+	} else {
+		_ = exec.Command("pm", "trim-caches", "999999999").Run()
+	}
+
+	// Brief pause for kernel /proc/meminfo to refresh
+	time.Sleep(500 * time.Millisecond)
+
+	resPost := getSystemResources()
+	postAvailMB := resPost.AvailableRAMMB
+	freedMB = postAvailMB - preAvailMB
+	if freedMB < 0 {
+		freedMB = 0
+	}
+
+	cleanedRAMFreedMB = freedMB
+	cleanedAppsCount = appsClosed
+
+	currTime := time.Now().Format("15:04:05")
+	safeLog("[%s] %s[OPTIMIZER]%s System cleanup complete. %d background targets processed | +%d MB RAM freed (Avail: %d MB)",
+		currTime, Green, NC, appsClosed, freedMB, postAvailMB)
+	writeLog("OPTIMIZER", fmt.Sprintf("Clean complete (%s). Targets: %d, Freed: +%d MB, Avail: %d MB",
+		cleanedModeDesc, appsClosed, freedMB, postAvailMB))
+
+	return freedMB, appsClosed
+}
+
 // ============================================================================
 // INSTANCE LAUNCH & ORCHESTRATION
 // ============================================================================
@@ -4370,6 +4616,17 @@ func launchInitialInstances() bool {
 	if isDeltaUpdateAvailable() {
 		handleDeltaUpgradeAbort("Pre-Launch Delta Check", nil)
 		return false
+	}
+
+	// Pre-Launch System Optimization & Background App Purge
+	if cleanMode != CleanModeNone {
+		drawLaunchStatusCard(0, cloneCount, "System Optimization", "Purging background apps & defragmenting RAM...")
+		freed, apps := optimizeSystemAndCleanApps(cleanMode)
+		if freed > 0 {
+			runAnimatedCountdown(fmt.Sprintf("System optimized (+%d MB freed, %d targets)...", freed, apps), 2, "CLEAN", fmt.Sprintf("Memory boosted (+%d MB freed)", freed))
+		} else {
+			runAnimatedCountdown("System optimized (Memory defragmented)...", 2, "CLEAN", "System clean & ready")
+		}
 	}
 
 	for i := 0; i < cloneCount; i++ {
@@ -5407,6 +5664,7 @@ func main() {
 	configureTargetExperience()
 	configureSentinel()
 	configureWebhook()
+	configureSystemOptimizer()
 
 	drawBanner()
 	drawSummaryCard()

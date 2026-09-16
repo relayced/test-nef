@@ -1,6 +1,9 @@
 1.4.4
 
 [New Functions & Features]
++ Added configureSystemOptimizer() interactive wizard step [1-3] for Deep Clean, Light Clean, or Skip
++ Added optimizeSystemAndCleanApps() 3-stage memory reclamation, cache flush & background app killer
++ Added isProtectedPackage() safe whitelist guard protecting Termux, root managers, System UI & IMEs
 + Added configureTargetExperience() with per-clone Custom Game & VIP link configuration (Mixed Mode)
 + Added getInstalledDeltaVersion() & getDisplayDeltaVersion() live APK version detection
 + Added extractVersionFromAPK() fallback zip reader parsing AndroidManifest.xml
