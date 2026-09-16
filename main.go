@@ -814,6 +814,12 @@ var knownGameProfiles = []GameMemoryProfile{
 	{Name: "Blade Ball", EstimatedRAMMB: 850, ProfileCategory: "Moderate (Fast Arena Action)"},
 	{Name: "Fisch", EstimatedRAMMB: 980, ProfileCategory: "Moderate-Heavy (Water Shaders)"},
 	{Name: "Anime Defenders", EstimatedRAMMB: 1050, ProfileCategory: "Heavy (Tower Defense Units)"},
+	{Name: "Bee Swarm Simulator", EstimatedRAMMB: 920, ProfileCategory: "Moderate (Pet Swarm Entities)"},
+	{Name: "RIVALS", EstimatedRAMMB: 1000, ProfileCategory: "Moderate-Heavy (FPS Arena)"},
+	{Name: "Tower Defense Sim", EstimatedRAMMB: 1050, ProfileCategory: "Heavy (Tower Defense Waves)"},
+	{Name: "King Legacy", EstimatedRAMMB: 1200, ProfileCategory: "Heavy (Naval RPG & Effects)"},
+	{Name: "Da Hood", EstimatedRAMMB: 900, ProfileCategory: "Moderate (Urban Map & Combat)"},
+	{Name: "Arsenal", EstimatedRAMMB: 880, ProfileCategory: "Moderate (FPS Arcade)"},
 	{Name: "Generic Roblox", EstimatedRAMMB: 950, ProfileCategory: "Standard Roblox Mobile Baseline"},
 }
 
@@ -3986,8 +3992,81 @@ func configureConcurrency() {
 	}
 }
 
+// GamePreset defines a popular Roblox experience with verified Place ID and description.
+type GamePreset struct {
+	Name    string
+	PlaceID string
+	Desc    string
+}
+
+var popularGamePresets = []GamePreset{
+	{Name: "Blox Fruits", PlaceID: "2753915549", Desc: "Action RPG & Devil Fruits"},
+	{Name: "Pet Simulator 99", PlaceID: "8737899170", Desc: "Pet Hatching & Coin Farm"},
+	{Name: "Fisch", PlaceID: "16732694052", Desc: "Fishing Sim & Bestiary"},
+	{Name: "Blade Ball", PlaceID: "13772394625", Desc: "Deflect Battle Arena"},
+	{Name: "Anime Defenders", PlaceID: "17017769292", Desc: "Tower Defense & Units"},
+	{Name: "Bee Swarm Simulator", PlaceID: "1537690962", Desc: "Pollen Gathering & Honey"},
+	{Name: "RIVALS", PlaceID: "17625359962", Desc: "Fast-Paced FPS Duel Arena"},
+	{Name: "Tower Defense Sim", PlaceID: "3260590327", Desc: "Multiplayer Wave Defense"},
+	{Name: "King Legacy", PlaceID: "4520749081", Desc: "Anime Naval Action RPG"},
+	{Name: "Da Hood", PlaceID: "2788229376", Desc: "Urban Combat & Cash Farm"},
+	{Name: "Arsenal", PlaceID: "286090429", Desc: "Arcade Shooter Arena"},
+	{Name: "Steal An Egg", PlaceID: "107778070777162", Desc: "Default Egg Collection"},
+}
+
+// pickPopularGame presents a list of popular pre-configured Roblox games.
+func pickPopularGame(title string) (cfg CloneGameConfig, ok bool) {
+	pad := getMenuLeftPad()
+	for {
+		drainInput()
+		var rows []BoxRow
+		rows = append(rows, BoxRow{
+			Type:        RowSubtitle,
+			CustomText:  "Choose a popular pre-configured game target.",
+			CustomColor: White,
+		})
+		rows = append(rows, BoxRow{Type: RowSeparator})
+
+		for i, preset := range popularGamePresets {
+			rows = append(rows, BoxRow{
+				Type:       RowKeyValue,
+				Label:      fmt.Sprintf("[%2d] %-18s : ", i+1, preset.Name),
+				LabelColor: Cyan,
+				Value:      preset.Desc,
+				ValueColor: Dim,
+			})
+		}
+		rows = append(rows, BoxRow{Type: RowSeparator})
+		rows = append(rows, BoxRow{
+			Type:        RowSubtitle,
+			CustomText:  fmt.Sprintf("Tip: Enter [1-%d] | type 'back' to cancel", len(popularGamePresets)),
+			CustomColor: Green,
+		})
+
+		drawStepCard(title, "Popular Roblox Experiences", rows)
+		fmt.Printf("%s> Selection [1-%d] ('back' to cancel): %s", pad+White, len(popularGamePresets), NC)
+		input := strings.TrimSpace(readLine())
+
+		if strings.ToLower(input) == "back" {
+			return CloneGameConfig{}, false
+		}
+
+		num, err := strconv.Atoi(input)
+		if err == nil && num >= 1 && num <= len(popularGamePresets) {
+			p := popularGamePresets[num-1]
+			return CloneGameConfig{
+				URL:  "roblox://placeId=" + p.PlaceID,
+				Name: p.Name,
+			}, true
+		}
+
+		drawAlertCard("ERROR", "[!] INVALID SELECTION", fmt.Sprintf("Please enter a number between 1 and %d.", len(popularGamePresets)), "", "")
+		time.Sleep(1200 * time.Millisecond)
+	}
+}
+
 // pickOneGame presents the standard game picker and returns a filled CloneGameConfig.
-// If initialChoice is provided (e.g. "1", "2", "3"), it skips the selection card and enters that flow directly.
+// If initialChoice is provided (e.g. "1", "2", "3", "4"), it skips the selection card and enters that flow directly.
 // Returns ok=false if the user chose 'back' from a sub-menu.
 func pickOneGame(title string, initialChoice ...string) (cfg CloneGameConfig, ok bool) {
 	pad := getMenuLeftPad()
@@ -4010,13 +4089,14 @@ func pickOneGame(title string, initialChoice ...string) (cfg CloneGameConfig, ok
 				{Type: RowSubtitle, CustomText: "Sentinel will keep the account connected 24/7.", CustomColor: Dim},
 				BoxRow{Type: RowSeparator},
 				{Type: RowKeyValue, Label: "[1] Steal An Egg ", LabelColor: Green, Value: "Public Server (Default)", ValueColor: Green},
-				{Type: RowKeyValue, Label: "[2] Custom Game  ", LabelColor: White, Value: "Paste Game Link / Place ID", ValueColor: Dim},
-				{Type: RowKeyValue, Label: "[3] Private VIP  ", LabelColor: White, Value: "Private Server Share Link", ValueColor: Dim},
+				{Type: RowKeyValue, Label: "[2] Popular Games", LabelColor: Cyan, Value: "Blox Fruits, Pet Sim, Fisch, Blade Ball...", ValueColor: Cyan},
+				{Type: RowKeyValue, Label: "[3] Custom Game  ", LabelColor: White, Value: "Paste Game Link / Place ID", ValueColor: Dim},
+				{Type: RowKeyValue, Label: "[4] Private VIP  ", LabelColor: White, Value: "Private Server Share Link", ValueColor: Dim},
 				BoxRow{Type: RowSeparator},
 				{Type: RowSubtitle, CustomText: "Tip: [ENTER] = Steal An Egg | type 'back' to go back", CustomColor: Green},
 			}
 			drawStepCard(title, "Roblox Auto-Join & Farm Target", rows)
-			fmt.Printf("%s> Selection [1-3] ('back' to cancel): %s", pad+White, NC)
+			fmt.Printf("%s> Selection [1-4] ('back' to cancel): %s", pad+White, NC)
 			choice = strings.TrimSpace(readLine())
 
 			// Allow cancelling back to the parent menu (e.g. from Mixed mode clone loop)
@@ -4038,6 +4118,13 @@ func pickOneGame(title string, initialChoice ...string) (cfg CloneGameConfig, ok
 			return CloneGameConfig{URL: "roblox://placeId=" + pid, Name: name}, true
 
 		case choice == "2":
+			popCfg, popOk := pickPopularGame(title)
+			if !popOk {
+				continue
+			}
+			return popCfg, true
+
+		case choice == "3":
 			for {
 				drawStepCard("CUSTOM EXPERIENCE", "Enter Place ID or Game URL", []BoxRow{
 					{Type: RowSubtitle, CustomText: "Paste your Roblox game URL or Place ID.", CustomColor: White},
@@ -4100,7 +4187,7 @@ func pickOneGame(title string, initialChoice ...string) (cfg CloneGameConfig, ok
 				return CloneGameConfig{URL: "roblox://placeId=" + customID, Name: cName}, true
 			}
 
-		case choice == "3":
+		case choice == "4":
 			for {
 				drawStepCard("PRIVATE VIP SERVER", "Private Server Share Link", []BoxRow{
 					{Type: RowSubtitle, CustomText: "Paste your private server share link.", CustomColor: White},
@@ -4134,7 +4221,7 @@ func pickOneGame(title string, initialChoice ...string) (cfg CloneGameConfig, ok
 			}
 
 		default:
-			drawAlertCard("ERROR", "[!] INVALID CHOICE", "Please enter 1, 2, or 3.", "", "")
+			drawAlertCard("ERROR", "[!] INVALID CHOICE", "Please enter 1, 2, 3, or 4.", "", "")
 			time.Sleep(1500 * time.Millisecond)
 		}
 	}
@@ -4148,36 +4235,32 @@ func configureTargetExperience() {
 			{Type: RowSubtitle, CustomText: "Sentinel will keep accounts connected 24/7.", CustomColor: Dim},
 			BoxRow{Type: RowSeparator},
 			{Type: RowKeyValue, Label: "[1] Steal An Egg ", LabelColor: Green, Value: "Public Server (Default)", ValueColor: Green},
-			{Type: RowKeyValue, Label: "[2] Custom Game  ", LabelColor: White, Value: "Paste Game Link / Place ID", ValueColor: Dim},
-			{Type: RowKeyValue, Label: "[3] Private VIP  ", LabelColor: White, Value: "Private Server Share Link", ValueColor: Dim},
+			{Type: RowKeyValue, Label: "[2] Popular Games", LabelColor: Cyan, Value: "Blox Fruits, Pet Sim, Fisch, Blade Ball...", ValueColor: Cyan},
+			{Type: RowKeyValue, Label: "[3] Custom Game  ", LabelColor: White, Value: "Paste Game Link / Place ID", ValueColor: Dim},
+			{Type: RowKeyValue, Label: "[4] Private VIP  ", LabelColor: White, Value: "Private Server Share Link", ValueColor: Dim},
 		}
 		if cloneCount > 1 {
 			rows = append(rows, BoxRow{
-				Type: RowKeyValue, Label: "[4] Mixed Mode  ", LabelColor: Amber,
+				Type: RowKeyValue, Label: "[5] Mixed Mode  ", LabelColor: Amber,
 				Value: fmt.Sprintf("Assign a different game to each of your %d clones", cloneCount), ValueColor: Amber,
 			})
 		}
-		tip := "Tip: Press [ENTER] to farm Steal An Egg (Default)"
+		tip := "Tip: Press [ENTER] for Steal An Egg | [2] for Popular Games"
 		if cloneCount > 1 {
-			tip = "Tip: Use [4] Mixed Mode to run different games across clones"
+			tip = "Tip: [2] Popular Presets | [5] Mixed Mode for per-clone games"
 		}
 		rows = append(rows, BoxRow{Type: RowSeparator}, BoxRow{Type: RowSubtitle, CustomText: tip, CustomColor: Green})
 		drawStepCard("2. TARGET EXPERIENCE", "Roblox Auto-Join & Farm Target", rows)
 
-		prompt := "> Selection [1-3] (default: 1): "
+		prompt := "> Selection [1-4] (default: 1): "
 		if cloneCount > 1 {
-			prompt = "> Selection [1-4] (default: 1): "
+			prompt = "> Selection [1-5] (default: 1): "
 		}
 		fmt.Printf("%s%s%s", pad+White, prompt, NC)
 		choice := strings.TrimSpace(readLine())
 
-		// [4] MIXED MODE - assign a different game to each clone
-		if choice == "4" {
-			if cloneCount <= 1 {
-				drawAlertCard("ERROR", "[!] MIXED MODE UNAVAILABLE", "Mixed mode requires 2 or more clones.", "", "")
-				time.Sleep(1500 * time.Millisecond)
-				continue
-			}
+		// [5] MIXED MODE - assign a different game to each clone
+		if choice == "5" && cloneCount > 1 {
 			configs := make([]CloneGameConfig, 0, cloneCount)
 			cancelled := false
 			for i := 0; i < cloneCount; i++ {
@@ -4198,9 +4281,12 @@ func configureTargetExperience() {
 			break
 		}
 
-		// Single-game paths (1 / 2 / 3 / blank) - delegate to pickOneGame
-		if choice != "" && choice != "1" && choice != "2" && choice != "3" {
-			drawAlertCard("ERROR", "[!] INVALID CHOICE", fmt.Sprintf("Please enter a number between 1 and %d.", map[bool]int{true: 4, false: 3}[cloneCount > 1]), "", "")
+		maxChoice := 4
+		if cloneCount > 1 {
+			maxChoice = 5
+		}
+		if choice != "" && choice != "1" && choice != "2" && choice != "3" && choice != "4" {
+			drawAlertCard("ERROR", "[!] INVALID CHOICE", fmt.Sprintf("Please enter a number between 1 and %d.", maxChoice), "", "")
 			time.Sleep(1500 * time.Millisecond)
 			continue
 		}

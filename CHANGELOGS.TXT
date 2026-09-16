@@ -2,6 +2,7 @@ Nefarious Hub - v1.4.4 Patch Notes
 ====================================
 
 **[New Features]**
++ Added Built-In Popular Games Presets — pre-configured 1-click game selector with verified Place IDs and tailored memory profiles for top experiences: Blox Fruits, Pet Simulator 99, Fisch, Blade Ball, Anime Defenders, Bee Swarm Simulator, RIVALS, Tower Defense Simulator, King Legacy, Da Hood, Arsenal, and Steal An Egg.
 + Added Pre-Launch System Optimizer & Background App Killer — automated 3-stage pre-flight cleanup terminating lingering clone processes, purging safe background apps via ActivityManager `am kill-all` & selective force-stop, flushing kernel page caches (`drop_caches`), and defragmenting physical RAM (`compact_memory`).
 + Added System Optimizer Setup Wizard Step [1-3] — interactive configuration allowing Deep Clean (Recommended), Light Clean (Caches & Stale Clones), or Skip with strict protection for Termux, root managers, and keyboards.
 + Added Real-Time Memory Boost Telemetry — measures and reports exact physical RAM freed (+MB) in the terminal pre-flight card, launch status spinner, and Discord session start embed.
