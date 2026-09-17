@@ -2017,9 +2017,12 @@ func loadOrCreateSpoofedProfile() SpoofedProfile {
 
 func detectVirtualDevice() (bool, string) {
 	readProp := func(key string) string {
-		out, err := exec.Command("getprop", key).Output()
+		out, err := exec.Command("/system/bin/getprop", key).Output()
 		if err != nil {
-			return ""
+			out, err = exec.Command("getprop", key).Output()
+			if err != nil {
+				return ""
+			}
 		}
 		return strings.ToLower(strings.TrimSpace(string(out)))
 	}
