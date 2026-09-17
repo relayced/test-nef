@@ -202,7 +202,13 @@ fi
 
 chmod +x "$LOCAL_BIN"
 
-# Clean ELF headers with termux-elf-cleaner if available on device
+# Android Bionic Linker Compatibility Guard
+# 1. Enforce 64-byte PT_TLS segment alignment (prevents ARM64 Bionic abort)
+if [ "$TARGET_BIN" = "nefhub_arm64" ] || [ "$TARGET_BIN" = "nefhub_amd64" ]; then
+    printf '\x40' | dd of="$LOCAL_BIN" bs=1 seek=616 count=1 conv=notrunc >/dev/null 2>&1 || true
+fi
+
+# 2. Clean ELF headers with termux-elf-cleaner if available on device
 if command -v termux-elf-cleaner >/dev/null 2>&1; then
     termux-elf-cleaner "$LOCAL_BIN" >/dev/null 2>&1 || true
 fi
