@@ -201,6 +201,12 @@ if [ ! -s "$LOCAL_BIN" ]; then
 fi
 
 chmod +x "$LOCAL_BIN"
+
+# Clean ELF headers with termux-elf-cleaner if available on device
+if command -v termux-elf-cleaner >/dev/null 2>&1; then
+    termux-elf-cleaner "$LOCAL_BIN" >/dev/null 2>&1 || true
+fi
+
 clear
 
 # Execute with TTY attachment for interactive menu
