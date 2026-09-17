@@ -2015,16 +2015,39 @@ func loadOrCreateSpoofedProfile() SpoofedProfile {
 	return prof
 }
 
-func detectVirtualDevice() (bool, string) {
+func detectVirtualDevice() (isVirt bool, virtName string) {
+	defer func() {
+		if r := recover(); r != nil {
+			isVirt = false
+			virtName = ""
+		}
+	}()
+
 	readProp := func(key string) string {
-		out, err := exec.Command("/system/bin/getprop", key).Output()
-		if err != nil {
+		defer func() {
+			if r := recover(); r != nil {
+			}
+		}()
+		var out []byte
+		var err error
+		if _, sErr := os.Stat("/system/bin/getprop"); sErr == nil {
+			out, err = exec.Command("/system/bin/getprop", key).Output()
+		} else {
 			out, err = exec.Command("getprop", key).Output()
-			if err != nil {
-				return ""
+		}
+		if err == nil && len(out) > 0 {
+			return strings.ToLower(strings.TrimSpace(string(out)))
+		}
+		// Fallback: read directly from /system/build.prop
+		if data, fErr := os.ReadFile("/system/build.prop"); fErr == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, key+"=") {
+					return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, key+"=")))
+				}
 			}
 		}
-		return strings.ToLower(strings.TrimSpace(string(out)))
+		return ""
 	}
 
 	if readProp("ro.kernel.qemu") == "1" {
@@ -2068,6 +2091,11 @@ func detectVirtualDevice() (bool, string) {
 }
 
 func applyHardwareSpoofing() {
+	defer func() {
+		if r := recover(); r != nil {
+		}
+	}()
+
 	prof := loadOrCreateSpoofedProfile()
 
 	if checkRoot() {
@@ -2094,18 +2122,43 @@ func applyHardwareSpoofing() {
 }
 
 func getDeviceHWID() string {
-	readCmd := func(name string, args ...string) string {
-		out, err := exec.Command(name, args...).Output()
-		if err != nil {
-			return ""
+	defer func() {
+		if r := recover(); r != nil {
 		}
-		return strings.TrimSpace(string(out))
+	}()
+
+	readProp := func(key string) string {
+		if _, sErr := os.Stat("/system/bin/getprop"); sErr == nil {
+			out, err := exec.Command("/system/bin/getprop", key).Output()
+			if err == nil && len(out) > 0 {
+				return strings.TrimSpace(string(out))
+			}
+		}
+		if data, fErr := os.ReadFile("/system/build.prop"); fErr == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, key+"=") {
+					return strings.TrimSpace(strings.TrimPrefix(line, key+"="))
+				}
+			}
+		}
+		return ""
 	}
 
-	aid := readCmd("settings", "get", "secure", "android_id")
-	model := readCmd("getprop", "ro.product.model")
-	build := readCmd("getprop", "ro.build.id")
-	serial := readCmd("getprop", "ro.serialno")
+	readSetting := func(key string) string {
+		if _, sErr := os.Stat("/system/bin/settings"); sErr == nil {
+			out, err := exec.Command("/system/bin/settings", "get", "secure", key).Output()
+			if err == nil {
+				return strings.TrimSpace(string(out))
+			}
+		}
+		return ""
+	}
+
+	aid := readSetting("android_id")
+	model := readProp("ro.product.model")
+	build := readProp("ro.build.id")
+	serial := readProp("ro.serialno")
 
 	if enableHardwareSpoof {
 		prof := loadOrCreateSpoofedProfile()
@@ -2119,9 +2172,12 @@ func getDeviceHWID() string {
 
 	raw := fmt.Sprintf("%s_%s_%s_%s", aid, model, build, serial)
 	if aid == "" && model == "" {
-		unameOut, _ := exec.Command("uname", "-a").Output()
-		whoamiOut, _ := exec.Command("whoami").Output()
-		raw = fmt.Sprintf("%s_%s", strings.TrimSpace(string(unameOut)), strings.TrimSpace(string(whoamiOut)))
+		host, _ := os.Hostname()
+		user := os.Getenv("USER")
+		if user == "" {
+			user = "termux"
+		}
+		raw = fmt.Sprintf("%s_%s_%s", host, user, runtime.GOARCH)
 	}
 
 	hash := sha256.Sum256([]byte(raw))
