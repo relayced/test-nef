@@ -1,5 +1,5 @@
 #!/bin/bash
-# Nefarious Hub Termux Launcher v1.4.4
+# Nefarious Hub Termux Launcher v1.4.5
 set -e
 
 REPO="${NEF_REPO:-relayced/test-nef}"

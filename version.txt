@@ -1,6 +1,12 @@
-1.4.4
+1.4.5
 
 [New Functions & Features]
++ Added checkForAccountLockOrChallenge() proactive scanner for Arkose/FunCaptcha, 2-Step Verification & account security holds
++ Added handleAccountLockAbort() immediately halting clone launches and isolating locked accounts from recovery cycles
++ Added drawAccountLockAlertCard() centered terminal alert box detailing account holds and providing actionable recovery steps
++ Added quarantineClone() thread-safe clone isolation with purgeFromRecoveryQueue() preventing infinite auto-rejoin loops
++ Added in-game HTTP /report and logcat real-time account security hold detection
++ Added dedicated rich Discord alert embeds with step-by-step instructions for clearing verification on physical devices
 + Added detectVirtualDevice() & applyHardwareSpoofing() Anti-VM and Samsung Galaxy S23 hardware camouflage
 + Added installTermuxBootHook() & saveSessionConfig() Termux:Boot auto-start upon phone restart
 + Added pickPopularGame() pre-configured game preset selector with 12 popular Roblox experiences

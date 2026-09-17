@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	ScriptVersion = "1.4.4"
+	ScriptVersion = "1.4.5"
 	LogFileName   = "farming_log.txt"
 
 	DeltaDownloadURL    = "https://delta.filenetwork.vip/android.html"
@@ -186,6 +186,9 @@ var (
 	cloneRecoveryCooldown   = make(map[string]time.Time)
 	cloneRecoveryCooldownMu sync.Mutex
 
+	quarantinedClones   = make(map[string]string)
+	quarantinedClonesMu sync.RWMutex
+
 	networkMu     sync.RWMutex
 	networkOnline = true
 
@@ -213,8 +216,32 @@ func getCloneGameConfig(pkg string) CloneGameConfig {
 	return CloneGameConfig{URL: gameURL, Name: gameName}
 }
 
+func isCloneQuarantined(pkg string) bool {
+	quarantinedClonesMu.RLock()
+	defer quarantinedClonesMu.RUnlock()
+	_, exists := quarantinedClones[pkg]
+	return exists
+}
+
+func getCloneQuarantineReason(pkg string) string {
+	quarantinedClonesMu.RLock()
+	defer quarantinedClonesMu.RUnlock()
+	return quarantinedClones[pkg]
+}
+
+func quarantineClone(pkg, reason string) {
+	quarantinedClonesMu.Lock()
+	quarantinedClones[pkg] = reason
+	quarantinedClonesMu.Unlock()
+	purgeFromRecoveryQueue(pkg)
+}
+
 // State helpers to prevent spam reopening and duplicate crash/disconnect triggers
 func isCloneRecoveringOrCooldown(pkg string) bool {
+	if isCloneQuarantined(pkg) {
+		return true
+	}
+
 	recoveringMu.Lock()
 	if recoveringClones[pkg] {
 		recoveringMu.Unlock()
@@ -3993,6 +4020,206 @@ func handleDeltaUpgradeAbort(reason string, pkgsToStop []string) {
 	fmt.Printf("\n%s%s[!] Joining halted. Update your Delta clones and rerun Nefarious.%s\n\n", pad, Bold+Red, NC)
 }
 
+func isAccountLockSignal(reason, detail string) bool {
+	combined := strings.ToLower(reason + " " + detail)
+	keywords := []string{
+		"account_locked",
+		"security_lock",
+		"verification_required",
+		"accountlocked",
+		"account locked",
+		"account has been locked",
+		"locked for security",
+		"two-step",
+		"twostep",
+		"arkose",
+		"funcaptcha",
+		"captcha",
+		"challenge_required",
+		"human verification",
+		"unusual activity",
+		"error code: 262",
+		"suspicious activity",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(combined, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAccountLockLogcat(line string) bool {
+	lower := strings.ToLower(line)
+	keywords := []string{
+		"accountlocked",
+		"account locked",
+		"locked for security",
+		"challengeactivity",
+		"captchaactivity",
+		"arkoselabs",
+		"funcaptcha",
+		"twostepverification",
+		"twostepactivity",
+		"verification required",
+		"human verification",
+	}
+	for _, kw := range keywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkForAccountLockOrChallenge(pkg string) (bool, string, string) {
+	cmds := []string{
+		"dumpsys window windows 2>/dev/null",
+		"dumpsys activity top 2>/dev/null",
+		"dumpsys window visible-apps 2>/dev/null",
+		"logcat -d -t 200 2>/dev/null",
+	}
+	if checkRoot() {
+		cmds = append(cmds, "su -c 'dumpsys window windows' 2>/dev/null")
+		cmds = append(cmds, "su -c 'dumpsys activity top' 2>/dev/null")
+		cmds = append(cmds, "su -c 'logcat -d -t 200' 2>/dev/null")
+	}
+
+	for _, cmdStr := range cmds {
+		out, err := exec.Command("sh", "-c", cmdStr).Output()
+		if err != nil || len(out) == 0 {
+			continue
+		}
+		s := string(out)
+		lower := strings.ToLower(s)
+
+		if pkg != "" && !strings.Contains(s, pkg) && !strings.Contains(lower, "roblox") {
+			continue
+		}
+
+		if strings.Contains(lower, "accountlocked") ||
+			strings.Contains(lower, "account locked") ||
+			strings.Contains(lower, "account has been locked") ||
+			strings.Contains(lower, "locked for security") ||
+			strings.Contains(lower, "account under review") ||
+			strings.Contains(lower, "account suspended") {
+			return true, "Account Security Lock", "Roblox has locked the account for security reasons or unusual activity."
+		}
+
+		if strings.Contains(lower, "arkoselabs") ||
+			strings.Contains(lower, "funcaptcha") ||
+			strings.Contains(lower, "captchaactivity") ||
+			strings.Contains(lower, "challengeactivity") ||
+			strings.Contains(lower, "human verification") ||
+			strings.Contains(lower, "twostepverification") ||
+			strings.Contains(lower, "twostepactivity") ||
+			strings.Contains(lower, "verification required") ||
+			strings.Contains(lower, "verify your identity") {
+			return true, "Human Verification (CAPTCHA / 2FA)", "Roblox requires manual human verification before proceeding."
+		}
+	}
+	return false, "", ""
+}
+
+func drawAccountLockAlertCard(displayName, pkg, issueType, detail string) {
+	clearTerminal()
+	termW, termH := detectTerminalSize()
+
+	rows := []BoxRow{
+		{
+			Type:        RowCentered,
+			CustomText:  "[!] ACCOUNT LOCK / VERIFICATION REQUIRED",
+			CustomColor: Bold + Red,
+		},
+		{Type: RowSeparator},
+		{
+			Type:       RowKeyValue,
+			Label:      "Target Clone : ",
+			LabelColor: Gray,
+			Value:      displayName + " (" + pkg + ")",
+			ValueColor: Bold + White,
+		},
+		{
+			Type:       RowKeyValue,
+			Label:      "Action       : ",
+			LabelColor: Gray,
+			Value:      "Opening Aborted & Auto-Rejoin Paused",
+			ValueColor: Bold + Amber,
+		},
+		{
+			Type:       RowKeyValue,
+			Label:      "Detection    : ",
+			LabelColor: Gray,
+			Value:      issueType,
+			ValueColor: Red,
+		},
+		{Type: RowSeparator},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "Actionable Steps to Resolve:",
+			CustomColor: Bold + Cyan,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "• Do NOT retry launching on this cloud/emulator device.",
+			CustomColor: Dim,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "• Log in on a physical device (phone/PC) using your home ISP.",
+			CustomColor: White,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "• Complete the CAPTCHA or reset password to clear the hold.",
+			CustomColor: White,
+		},
+		{
+			Type:        RowSubtitle,
+			CustomText:  "• Once verified on your real device, rerun Nefarious Hub.",
+			CustomColor: Green,
+		},
+	}
+
+	box := renderCenteredBox("ALERT_ACCOUNT_LOCK", rows, termW, termH, Red)
+	fmt.Print(box)
+
+	pad := getMenuLeftPad()
+	fmt.Printf("\n%s%s[!] Opening aborted for %s to protect account.%s\n\n", pad, Bold+Red, displayName, NC)
+}
+
+func handleAccountLockAbort(pkg, displayName, issueType, detail string) {
+	quarantineClone(pkg, issueType)
+
+	if checkRoot() {
+		_ = exec.Command("su", "-c", "am force-stop "+pkg).Run()
+	} else {
+		_ = exec.Command("am", "force-stop", pkg).Run()
+	}
+
+	writeLog("ACCOUNT_LOCK_ABORT", fmt.Sprintf("%s (%s) aborted: %s - %s", displayName, pkg, issueType, detail))
+
+	if discordWebhook != "" {
+		fields := []DiscordEmbedField{
+			{Name: "🛑 Action Taken", Value: "`Clone Opening Aborted (Quarantined)`", Inline: true},
+			{Name: "📱 Affected Clone", Value: fmt.Sprintf("`%s` (`%s`)", displayName, pkg), Inline: true},
+			{Name: "⚠️ Detected Issue", Value: fmt.Sprintf("`%s`", issueType), Inline: false},
+			{Name: "📝 Details", Value: fmt.Sprintf("```%s```", truncate(detail, 300)), Inline: false},
+			{Name: "💡 Recommended Fix", Value: "1. **Do not retry on this cloud/emulator device.**\n2. Open Roblox on your **physical phone or PC** (home ISP).\n3. Complete the CAPTCHA challenge or password reset.\n4. Once unlocked, you can restart Sentinel.", Inline: false},
+			{Name: "🕒 Detected At", Value: time.Now().Format("2006-01-02 15:04:05"), Inline: true},
+		}
+		sendRichWebhook(EventGeneral, "🚨 "+displayName+" Aborted: Account Lock / Verification Required",
+			fmt.Sprintf("Roblox has triggered a security lock or human verification challenge for **%s**.\nSentinel has **aborted launching and disabled auto-rejoin** for this clone to prevent account suspension.", displayName),
+			15158332, fields)
+	}
+
+	currTime := time.Now().Format("15:04:05")
+	safeLog("\n[%s] %s[ALERT]%s     %s%s%s: %s%s%s", currTime, Red, NC, White, displayName, NC, Amber, issueType)
+	safeLog("[%s] %s[GUIDE]%s     %s", currTime, Green, NC, "Opening aborted & auto-rejoin halted. Please unlock via physical device.")
+
+	drawAccountLockAlertCard(displayName, pkg, issueType, detail)
+}
+
 func fetchLatestDeltaVersion() (string, string, error) {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -5119,6 +5346,12 @@ func launchInitialInstances() bool {
 		pkg := activePackages[i]
 		displayName := fmt.Sprintf("Clone %d", i+1)
 
+		if isLock, issue, det := checkForAccountLockOrChallenge(pkg); isLock {
+			handleAccountLockAbort(pkg, displayName, issue, det)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
 		recentlyLaunchedMu.Lock()
 		recentlyLaunchedPkg = pkg
 		recentlyLaunchedMu.Unlock()
@@ -5136,6 +5369,12 @@ func launchInitialInstances() bool {
 		time.Sleep(600 * time.Millisecond)
 		hideSoftKeyboard()
 
+		if isLock, issue, det := checkForAccountLockOrChallenge(pkg); isLock {
+			handleAccountLockAbort(pkg, displayName, issue, det)
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
 		// Check if launching triggered the upgrade dialog
 		if checkForUpgradeDialog() {
 			handleDeltaUpgradeAbort("Roblox Upgrade Dialog Detected", activePackages[:i+1])
@@ -5148,6 +5387,11 @@ func launchInitialInstances() bool {
 		if isDeltaUpdateAvailable() || checkForUpgradeDialog() {
 			handleDeltaUpgradeAbort("Roblox Upgrade Detected During Warmup", activePackages[:i+1])
 			return false
+		}
+		if isLock, issue, det := checkForAccountLockOrChallenge(pkg); isLock {
+			handleAccountLockAbort(pkg, displayName, issue, det)
+			time.Sleep(3 * time.Second)
+			continue
 		}
 
 		cloneGame := getCloneGameConfig(pkg)
@@ -5166,10 +5410,15 @@ func launchInitialInstances() bool {
 		time.Sleep(600 * time.Millisecond)
 		hideSoftKeyboard()
 
-		// Check if connecting to game triggered upgrade dialog
+		// Check if connecting to game triggered upgrade dialog or account lock
 		if checkForUpgradeDialog() {
 			handleDeltaUpgradeAbort("Roblox Upgrade Dialog Detected", activePackages[:i+1])
 			return false
+		}
+		if isLock, issue, det := checkForAccountLockOrChallenge(pkg); isLock {
+			handleAccountLockAbort(pkg, displayName, issue, det)
+			time.Sleep(3 * time.Second)
+			continue
 		}
 
 		if i < cloneCount-1 {
@@ -5178,6 +5427,11 @@ func launchInitialInstances() bool {
 			if checkForUpgradeDialog() {
 				handleDeltaUpgradeAbort("Roblox Upgrade Dialog Detected", activePackages[:i+1])
 				return false
+			}
+			if isLock, issue, det := checkForAccountLockOrChallenge(pkg); isLock {
+				handleAccountLockAbort(pkg, displayName, issue, det)
+				time.Sleep(3 * time.Second)
+				continue
 			}
 		}
 	}
@@ -5206,11 +5460,28 @@ var (
 	recoveryWorkerRunning  bool
 )
 
+func purgeFromRecoveryQueue(pkg string) {
+	recoveryQueueMu.Lock()
+	defer recoveryQueueMu.Unlock()
+	var newQueue []RecoveryRequest
+	for _, req := range recoveryQueue {
+		if req.Pkg != pkg {
+			newQueue = append(newQueue, req)
+		}
+	}
+	recoveryQueue = newQueue
+	syncDashboardQueueState()
+}
+
 func enqueueRecovery(pkg, displayName string, isANR bool) {
 	networkMu.RLock()
 	netUp := networkOnline
 	networkMu.RUnlock()
 	if !netUp {
+		return
+	}
+
+	if isCloneQuarantined(pkg) {
 		return
 	}
 
@@ -5350,8 +5621,19 @@ func executeCloneRecovery(pkg, displayName string, isANR bool) {
 		return
 	}
 
+	if isCloneQuarantined(pkg) {
+		safeLog("[%s] %s[ABORT]%s     Recovery aborted for %s (Quarantined: %s)",
+			time.Now().Format("15:04:05"), Red, NC, displayName, getCloneQuarantineReason(pkg))
+		return
+	}
+
 	if isDeltaUpdateAvailable() || checkForUpgradeDialog() {
 		handleDeltaUpgradeAbort("Sentinel Watchdog Recovery", []string{pkg})
+		return
+	}
+
+	if isLock, issue, det := checkForAccountLockOrChallenge(pkg); isLock {
+		handleAccountLockAbort(pkg, displayName, issue, det)
 		return
 	}
 
@@ -5494,9 +5776,9 @@ func startSentinelMonitor() {
 	_ = exec.Command("logcat", "-c").Run()
 	time.Sleep(1 * time.Second)
 
-	filterRegex := regexp.MustCompile(`WIN DEATH|has died|am_crash|ANR in|am_anr|Error Code: 273|Error Code: 277|Same account launched|Disconnected from`)
+	filterRegex := regexp.MustCompile(`WIN DEATH|has died|am_crash|ANR in|am_anr|Error Code: 273|Error Code: 277|Same account launched|Disconnected from|AccountLocked|ChallengeActivity|TwoStepVerification|arkoselabs|Funcaptcha`)
 	anrRegex := regexp.MustCompile(`ANR in|am_anr`)
-	disconnectRegex := regexp.MustCompile(`Error Code: 273|Error Code: 277|Same account launched|Disconnected from`)
+	disconnectRegex := regexp.MustCompile(`Error Code: 273|Error Code: 277|Same account launched|Disconnected from|AccountLocked|ChallengeActivity|TwoStepVerification|arkoselabs|Funcaptcha`)
 
 	for {
 		cmd := exec.Command("logcat")
@@ -5548,11 +5830,17 @@ func startSentinelMonitor() {
 				}
 
 				if matchesPkg {
+					cloneNum := i + 1
+					displayName := fmt.Sprintf("Clone %d", cloneNum)
+
+					if isAccountLockLogcat(line) {
+						handleAccountLockAbort(pkg, displayName, "Logcat Account Security / Challenge", line)
+						continue
+					}
+
 					if isCloneRecoveringOrCooldown(pkg) {
 						continue
 					}
-					cloneNum := i + 1
-					displayName := fmt.Sprintf("Clone %d", cloneNum)
 					isANR := anrRegex.MatchString(line)
 					enqueueRecovery(pkg, displayName, isANR)
 				}
@@ -5915,6 +6203,11 @@ func startLocalBridgeServer() {
 
 		displayName := getCloneDisplayName(targetPkg)
 
+		if isAccountLockSignal(reason, detail) {
+			handleAccountLockAbort(targetPkg, displayName, "In-Game Reported Account Lock", reason+" - "+detail)
+			return
+		}
+
 		if isCloneRecoveringOrCooldown(targetPkg) {
 			return
 		}
@@ -6051,6 +6344,16 @@ func startEventLogWatcher() {
 			safeLog("[%s] %s[SENTINEL]%s  %s", currTime, tagColor, NC, cleanSentinelLogLine(line))
 			writeLog("SENTINEL_LOG", line)
 
+			if isAccountLockSignal(line, "") {
+				for i, p := range activePackages {
+					cloneTag := fmt.Sprintf("Clone %d", i+1)
+					if strings.Contains(line, cloneTag) || strings.Contains(line, p) {
+						handleAccountLockAbort(p, cloneTag, "Event Log Account Lock Signal", line)
+					}
+				}
+				continue
+			}
+
 			if strings.Contains(line, "KICK_DETECTED") || strings.Contains(line, "RECONNECT_FAILED") {
 				for i, p := range activePackages {
 					cloneTag := fmt.Sprintf("Clone %d", i+1)
@@ -6094,6 +6397,11 @@ func startKickSignalWatcher() {
 		if targetPkg == "" && len(activePackages) > 0 {
 			targetPkg = activePackages[0]
 			displayName = "Clone 1"
+		}
+
+		if isAccountLockSignal(raw, "") {
+			handleAccountLockAbort(targetPkg, displayName, "Kick Signal Account Lock", raw)
+			continue
 		}
 
 		if isCloneRecoveringOrCooldown(targetPkg) {

@@ -1,3 +1,14 @@
+Nefarious Hub - v1.4.5 Patch Notes
+====================================
+
+**[New Features]**
++ Added Account Lock & Human Verification Proactive Abort Guard — automatically scans for Arkose Labs/FunCaptcha challenges, 2-Step Verification, and Account Security Locks during pre-flight, warmup, and live gameplay.
++ Added Automated Clone Opening Abort & Quarantine — instantly terminates clone APKs encountering verification holds (`am force-stop`) and quarantines them to protect accounts against suspension and rate limiting.
++ Added Infinite Rejoin Loop Elimination — automatically purges quarantined accounts from Sentinel's recovery queue, preventing repeated futile recovery cycles on locked accounts.
++ Added Dedicated Terminal Account Alert Card — displays a centered, double-bordered red alert box detailing the affected clone, trigger reason, and actionable step-by-step unlock guidance.
++ Added High-Priority Discord Alert Embed — dispatches rich Discord notifications recommending users authenticate on a physical device/home ISP before resuming automation.
+
+====================================
 Nefarious Hub - v1.4.4 Patch Notes
 ====================================
 
