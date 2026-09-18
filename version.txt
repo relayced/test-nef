@@ -1,6 +1,7 @@
-1.4.5
+1.4.6
 
 [New Functions & Features]
++ Added configureClientSelection() interactive Step 1 prompt for Normal Roblox (single instance full window), JEP Clones, or Other Clones
 + Added checkForAccountLockOrChallenge() proactive scanner for Arkose/FunCaptcha, 2-Step Verification & account security holds
 + Added handleAccountLockAbort() immediately halting clone launches and isolating locked accounts from recovery cycles
 + Added drawAccountLockAlertCard() centered terminal alert box detailing account holds and providing actionable recovery steps

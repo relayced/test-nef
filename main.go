@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	ScriptVersion = "1.4.5"
+	ScriptVersion = "1.4.6"
 	LogFileName   = "farming_log.txt"
 
 	DeltaDownloadURL    = "https://delta.filenetwork.vip/android.html"
@@ -1503,7 +1503,7 @@ func drainInput() {
 	for {
 		select {
 		case <-inputChan:
-		default:
+		case <-time.After(50 * time.Millisecond):
 			return
 		}
 	}
@@ -4510,6 +4510,7 @@ func verifyLicense() {
 // ============================================================================
 
 func configureClientSelection() {
+	time.Sleep(100 * time.Millisecond)
 	drainInput()
 	detected, _ := scanInstalledRobloxPackages()
 
@@ -4662,14 +4663,6 @@ func configureClientSelection() {
 }
 
 func configureConcurrency() {
-	configureClientSelection()
-	if clientMode == "normal" {
-		cloneCount = 1
-		activePackages = []string{allPackages[0]}
-		setDashboardStatus("Normal Roblox Selected (Full Window)", Green)
-		return
-	}
-
 	drainInput()
 	res := getSystemResources()
 	rec := getRecommendedClones(res)
@@ -4752,7 +4745,7 @@ func configureConcurrency() {
 		if res.TotalRAMMB > 0 {
 			sub = fmt.Sprintf("RAM: %.1fGB | CPU: %d Cores (%s, %.0f%%) | Rec: %d Clones", res.TotalRAMGB, res.CPUCores, res.BitnessDesc, res.CPUUsagePercent, rec)
 		}
-		drawStepCard("1. INSTANCE CONCURRENCY", sub, rows)
+		drawStepCard("2. INSTANCE CONCURRENCY", sub, rows)
 
 		fmt.Printf("%s› Clones [1-%d] (default: %d): %s", pad+White, maxClones, rec, NC)
 		input := strings.TrimSpace(readLine())
@@ -6904,7 +6897,10 @@ func main() {
 	}
 
 	drawBanner()
-	configureConcurrency()
+	configureClientSelection()
+	if clientMode != "normal" {
+		configureConcurrency()
+	}
 	configureTargetExperience()
 	configureSentinel()
 	configureWebhook()
