@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,7 +68,7 @@ const (
 	Red   = "\033[38;5;203m"
 )
 
-var allPackages = []string{
+var defaultJEPPackages = []string{
 	"com.roblox.clienb",
 	"com.roblox.clienc",
 	"com.roblox.cliend",
@@ -75,6 +76,9 @@ var allPackages = []string{
 	"com.roblox.clienf",
 	"com.roblox.clieng",
 }
+
+var allPackages = append([]string{}, defaultJEPPackages...)
+var clientMode = "jep" // "normal", "jep", "custom"
 
 // CleanMode defines the depth of pre-launch system optimization.
 type CleanMode int
@@ -584,12 +588,18 @@ func runAnimatedTask(label string, task func() error) error {
 // ============================================================================
 
 func getCloneDisplayName(pkg string) string {
+	if pkg == "com.roblox.client" {
+		return "Main Roblox"
+	}
 	for i, p := range allPackages {
 		if p == pkg {
+			if clientMode == "custom" {
+				return fmt.Sprintf("App %d", i+1)
+			}
 			return fmt.Sprintf("Clone %d", i+1)
 		}
 	}
-	if strings.Contains(pkg, "Clone") {
+	if strings.Contains(pkg, "Clone") || strings.Contains(pkg, "App") {
 		return pkg
 	}
 	return "Clone 1"
@@ -1328,6 +1338,105 @@ func isPackageInstalled(pkg string) bool {
 	return false
 }
 
+// DetectedRobloxApps holds the categorized Roblox packages found on the device.
+type DetectedRobloxApps struct {
+	NormalRoblox string   // "com.roblox.client" if installed
+	JEPClones    []string // e.g. ["com.roblox.clienb", "com.roblox.clienc", ...]
+	OtherClones  []string // e.g. ["com.roblox.client2", "com.appcloner.roblox", ...]
+}
+
+func (d *DetectedRobloxApps) TotalDetected() int {
+	total := len(d.JEPClones) + len(d.OtherClones)
+	if d.NormalRoblox != "" {
+		total++
+	}
+	return total
+}
+
+func isJEPClone(pkg string) bool {
+	lower := strings.ToLower(pkg)
+	if lower == "com.roblox.client" {
+		return false
+	}
+	if strings.Contains(lower, "jep") {
+		return true
+	}
+	// Match com.roblox.clien[b-z] excluding official 't'
+	if strings.HasPrefix(lower, "com.roblox.clien") && len(lower) == len("com.roblox.clien")+1 {
+		lastChar := lower[len(lower)-1]
+		if lastChar >= 'b' && lastChar <= 'z' && lastChar != 't' {
+			return true
+		}
+	}
+	return false
+}
+
+func parseRobloxPackagesOutput(output string) DetectedRobloxApps {
+	var result DetectedRobloxApps
+	seen := make(map[string]bool)
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pkg := strings.TrimPrefix(line, "package:")
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" || seen[pkg] {
+			continue
+		}
+
+		lower := strings.ToLower(pkg)
+		if !strings.Contains(lower, "roblox") {
+			continue
+		}
+
+		seen[pkg] = true
+		if lower == "com.roblox.client" {
+			result.NormalRoblox = pkg
+		} else if isJEPClone(pkg) {
+			result.JEPClones = append(result.JEPClones, pkg)
+		} else {
+			result.OtherClones = append(result.OtherClones, pkg)
+		}
+	}
+
+	sort.Strings(result.JEPClones)
+	sort.Strings(result.OtherClones)
+	return result
+}
+
+func scanInstalledRobloxPackages() (DetectedRobloxApps, bool) {
+	cmds := [][]string{
+		{"pm", "list", "packages", "roblox"},
+		{"/system/bin/pm", "list", "packages", "roblox"},
+		{"cmd", "package", "list", "packages", "roblox"},
+	}
+
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		out, err := cmd.CombinedOutput()
+		if err == nil && len(out) > 0 {
+			res := parseRobloxPackagesOutput(string(out))
+			if res.TotalDetected() > 0 {
+				return res, true
+			}
+		}
+	}
+
+	if checkRoot() {
+		out, err := exec.Command("su", "-c", "pm list packages roblox").CombinedOutput()
+		if err == nil && len(out) > 0 {
+			res := parseRobloxPackagesOutput(string(out))
+			if res.TotalDetected() > 0 {
+				return res, true
+			}
+		}
+	}
+
+	return DetectedRobloxApps{}, false
+}
+
 func checkInstalledClones(count int) ([]string, bool) {
 	// Determine if running on Android
 	isAndroid := false
@@ -1345,9 +1454,12 @@ func checkInstalledClones(count int) ([]string, bool) {
 
 	var missing []string
 	for i := 0; i < count; i++ {
+		if i >= len(allPackages) {
+			break
+		}
 		pkg := allPackages[i]
 		if !isPackageInstalled(pkg) {
-			missing = append(missing, fmt.Sprintf("Clone %d", i+1))
+			missing = append(missing, getCloneDisplayName(pkg))
 		}
 	}
 
@@ -1491,6 +1603,8 @@ func saveDiscordMention(mention string) {
 }
 
 type SavedSessionConfig struct {
+	ClientMode          string            `json:"client_mode,omitempty"`
+	ActivePackages      []string          `json:"active_packages,omitempty"`
 	CloneCount          int               `json:"clone_count"`
 	GameName            string            `json:"game_name"`
 	GameURL             string            `json:"game_url"`
@@ -1509,6 +1623,8 @@ func getSessionConfigPath() string {
 
 func saveSessionConfig() {
 	cfg := SavedSessionConfig{
+		ClientMode:          clientMode,
+		ActivePackages:      activePackages,
 		CloneCount:          cloneCount,
 		GameName:            gameName,
 		GameURL:             gameURL,
@@ -3107,11 +3223,17 @@ func drawSummaryCard() {
 			ValueColor: typeColor,
 		})
 	}
+	instanceLabel := fmt.Sprintf("%d Clone%s", cloneCount, plural(cloneCount))
+	if clientMode == "normal" {
+		instanceLabel = "1 Instance (Full Window)"
+	} else if clientMode == "custom" {
+		instanceLabel = fmt.Sprintf("%d Custom App%s", cloneCount, plural(cloneCount))
+	}
 	rows = append(rows, BoxRow{
 		Type:       RowKeyValue,
 		Label:      "Instances : ",
 		LabelColor: Gray,
-		Value:      fmt.Sprintf("%d Clone%s", cloneCount, plural(cloneCount)),
+		Value:      instanceLabel,
 		ValueColor: White,
 	})
 
@@ -4387,10 +4509,168 @@ func verifyLicense() {
 // CONFIGURATION MENUS
 // ============================================================================
 
+func configureClientSelection() {
+	drainInput()
+	detected, found := scanInstalledRobloxPackages()
+	if !found || detected.TotalDetected() == 0 {
+		// Fallback: use default JEP clones
+		allPackages = append([]string{}, defaultJEPPackages...)
+		clientMode = "jep"
+		return
+	}
+
+	// If ONLY Normal Roblox is detected
+	if detected.NormalRoblox != "" && len(detected.JEPClones) == 0 && len(detected.OtherClones) == 0 {
+		clientMode = "normal"
+		allPackages = []string{detected.NormalRoblox}
+		activePackages = []string{detected.NormalRoblox}
+		cloneCount = 1
+		setDashboardStatus("Normal Roblox Selected (Full Window)", Green)
+		return
+	}
+
+	// If ONLY JEP Clones are detected
+	if detected.NormalRoblox == "" && len(detected.JEPClones) > 0 && len(detected.OtherClones) == 0 {
+		clientMode = "jep"
+		allPackages = detected.JEPClones
+		return
+	}
+
+	// If ONLY Other Clones are detected
+	if detected.NormalRoblox == "" && len(detected.JEPClones) == 0 && len(detected.OtherClones) > 0 {
+		clientMode = "custom"
+		allPackages = detected.OtherClones
+		return
+	}
+
+	// Multiple options exist -> Show interactive selection menu!
+	type ClientOption struct {
+		Mode     string
+		Title    string
+		Desc     string
+		Packages []string
+	}
+
+	for {
+		pad := getMenuLeftPad()
+		var opts []ClientOption
+		var rows []BoxRow
+
+		rows = append(rows,
+			BoxRow{
+				Type:        RowSubtitle,
+				CustomText:  "Multiple Roblox installations detected on this device.",
+				CustomColor: White,
+			},
+			BoxRow{
+				Type:        RowSubtitle,
+				CustomText:  "Select which client or clone group you want to run.",
+				CustomColor: Dim,
+			},
+			BoxRow{Type: RowSeparator},
+		)
+
+		if detected.NormalRoblox != "" {
+			opts = append(opts, ClientOption{
+				Mode:     "normal",
+				Title:    "Normal Roblox (Official Client)",
+				Desc:     "Single instance in standard full-screen window",
+				Packages: []string{detected.NormalRoblox},
+			})
+		}
+		if len(detected.JEPClones) > 0 {
+			opts = append(opts, ClientOption{
+				Mode:     "jep",
+				Title:    fmt.Sprintf("JEP Clones (%d Detected)", len(detected.JEPClones)),
+				Desc:     fmt.Sprintf("Multi-instance farming: %s ... %s", detected.JEPClones[0], detected.JEPClones[len(detected.JEPClones)-1]),
+				Packages: detected.JEPClones,
+			})
+		}
+		if len(detected.OtherClones) > 0 {
+			opts = append(opts, ClientOption{
+				Mode:     "custom",
+				Title:    fmt.Sprintf("Other / Custom Clones (%d Detected)", len(detected.OtherClones)),
+				Desc:     fmt.Sprintf("Packages: %s", strings.Join(detected.OtherClones, ", ")),
+				Packages: detected.OtherClones,
+			})
+		}
+
+		defaultOpt := 1
+		for i, opt := range opts {
+			color := White
+			if opt.Mode == "jep" {
+				defaultOpt = i + 1
+				color = Cyan
+			}
+			rows = append(rows,
+				BoxRow{
+					Type:       RowKeyValue,
+					Label:      fmt.Sprintf("[%d] %s", i+1, opt.Title),
+					LabelColor: color,
+					Value:      opt.Desc,
+					ValueColor: Dim,
+				},
+			)
+		}
+
+		rows = append(rows,
+			BoxRow{Type: RowSeparator},
+			BoxRow{
+				Type:        RowSubtitle,
+				CustomText:  fmt.Sprintf("Tip: Press [ENTER] to use default (Option %d)", defaultOpt),
+				CustomColor: Green,
+			},
+		)
+
+		drawStepCard("ROBLOX CLIENT SELECTION", "Auto-Detected Roblox Installations", rows)
+		fmt.Printf("%s› Select Option [1-%d] (default: %d): %s", pad+White, len(opts), defaultOpt, NC)
+		input := strings.TrimSpace(readLine())
+		chosen := defaultOpt
+		if input != "" {
+			c, err := strconv.Atoi(input)
+			if err != nil || c < 1 || c > len(opts) {
+				drawAlertCard("ERROR", "[!] INVALID ENTRY", fmt.Sprintf("Please enter a number between 1 and %d.", len(opts)), "", "")
+				time.Sleep(1500 * time.Millisecond)
+				continue
+			}
+			chosen = c
+		}
+
+		selectedOpt := opts[chosen-1]
+		clientMode = selectedOpt.Mode
+		allPackages = selectedOpt.Packages
+
+		if clientMode == "normal" {
+			cloneCount = 1
+			activePackages = []string{detected.NormalRoblox}
+			setDashboardStatus("Normal Roblox Selected (Full Window)", Green)
+		}
+		break
+	}
+}
+
 func configureConcurrency() {
+	configureClientSelection()
+	if clientMode == "normal" {
+		cloneCount = 1
+		activePackages = []string{allPackages[0]}
+		setDashboardStatus("Normal Roblox Selected (Full Window)", Green)
+		return
+	}
+
 	drainInput()
 	res := getSystemResources()
 	rec := getRecommendedClones(res)
+	maxClones := len(allPackages)
+	if maxClones > 6 {
+		maxClones = 6
+	}
+	if maxClones <= 0 {
+		maxClones = 1
+	}
+	if rec > maxClones {
+		rec = maxClones
+	}
 
 	for {
 		pad := getMenuLeftPad()
@@ -4409,7 +4689,7 @@ func configureConcurrency() {
 			BoxRow{Type: RowSeparator},
 		)
 
-		for i := 1; i <= 6; i++ {
+		for i := 1; i <= maxClones; i++ {
 			var note string
 			var color string = White
 			if i == rec {
@@ -4462,13 +4742,13 @@ func configureConcurrency() {
 		}
 		drawStepCard("1. INSTANCE CONCURRENCY", sub, rows)
 
-		fmt.Printf("%s› Clones [1-6] (default: %d): %s", pad+White, rec, NC)
+		fmt.Printf("%s› Clones [1-%d] (default: %d): %s", pad+White, maxClones, rec, NC)
 		input := strings.TrimSpace(readLine())
 		selected := rec
 		if input != "" {
 			c, err := strconv.Atoi(input)
-			if err != nil || c < 1 || c > 6 {
-				drawAlertCard("ERROR", "[!] INVALID ENTRY", "Please enter a number between 1 and 6.", "", "")
+			if err != nil || c < 1 || c > maxClones {
+				drawAlertCard("ERROR", "[!] INVALID ENTRY", fmt.Sprintf("Please enter a number between 1 and %d.", maxClones), "", "")
 				time.Sleep(1500 * time.Millisecond)
 				continue
 			}
@@ -5162,7 +5442,10 @@ func optimizeSystemAndCleanApps(mode CleanMode) (freedMB int, appsClosed int) {
 	preAvailMB := resPre.AvailableRAMMB
 
 	// Stage 1: Purge stale or lingering Roblox clones & temporary signal files
-	for _, pkg := range allPackages {
+	var cleanupPkgs []string
+	cleanupPkgs = append(cleanupPkgs, allPackages...)
+	cleanupPkgs = append(cleanupPkgs, "com.roblox.client")
+	for _, pkg := range cleanupPkgs {
 		_ = exec.Command("am", "force-stop", pkg).Run()
 		if checkRoot() {
 			_ = exec.Command("su", "-c", "am force-stop "+pkg).Run()
@@ -6518,11 +6801,20 @@ func main() {
 	if isAutoStartMode {
 		cfg, ok := loadSessionConfig()
 		if ok && cfg.CloneCount > 0 {
-			cloneCount = cfg.CloneCount
-			if cloneCount > len(allPackages) {
-				cloneCount = len(allPackages)
+			if cfg.ClientMode != "" {
+				clientMode = cfg.ClientMode
 			}
-			activePackages = allPackages[:cloneCount]
+			if len(cfg.ActivePackages) > 0 {
+				activePackages = cfg.ActivePackages
+				allPackages = cfg.ActivePackages
+				cloneCount = len(activePackages)
+			} else {
+				cloneCount = cfg.CloneCount
+				if cloneCount > len(allPackages) {
+					cloneCount = len(allPackages)
+				}
+				activePackages = allPackages[:cloneCount]
+			}
 			gameName = cfg.GameName
 			gameURL = cfg.GameURL
 			cloneGameConfigs = cfg.CloneConfigs
@@ -6540,7 +6832,11 @@ func main() {
 
 			pad := getMenuLeftPad()
 			fmt.Printf("\n%s%s⚡ AUTO-BOOT TRIGGERED (Termux:Boot Mode)%s\n", pad, Bold+Cyan, NC)
-			fmt.Printf("%s%sProfile: %d Clones | Game: %s | Anti-VM: %v%s\n", pad, White, cloneCount, gameName, enableHardwareSpoof, NC)
+			bootProfileText := fmt.Sprintf("Profile: %d Clones | Game: %s | Anti-VM: %v", cloneCount, gameName, enableHardwareSpoof)
+			if clientMode == "normal" {
+				bootProfileText = fmt.Sprintf("Profile: Main Roblox (Full Window) | Game: %s | Anti-VM: %v", gameName, enableHardwareSpoof)
+			}
+			fmt.Printf("%s%s%s%s\n", pad, White, bootProfileText, NC)
 			fmt.Printf("%s%sAuto-starting in 5 seconds... (Press [ENTER] to cancel auto-boot)%s\n\n", pad, Amber, NC)
 
 			cancelled := false
