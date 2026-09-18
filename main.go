@@ -4511,106 +4511,82 @@ func verifyLicense() {
 
 func configureClientSelection() {
 	drainInput()
-	detected, found := scanInstalledRobloxPackages()
-	if !found || detected.TotalDetected() == 0 {
-		// Fallback: use default JEP clones
-		allPackages = append([]string{}, defaultJEPPackages...)
-		clientMode = "jep"
-		return
-	}
-
-	// If ONLY Normal Roblox is detected
-	if detected.NormalRoblox != "" && len(detected.JEPClones) == 0 && len(detected.OtherClones) == 0 {
-		clientMode = "normal"
-		allPackages = []string{detected.NormalRoblox}
-		activePackages = []string{detected.NormalRoblox}
-		cloneCount = 1
-		setDashboardStatus("Normal Roblox Selected (Full Window)", Green)
-		return
-	}
-
-	// If ONLY JEP Clones are detected
-	if detected.NormalRoblox == "" && len(detected.JEPClones) > 0 && len(detected.OtherClones) == 0 {
-		clientMode = "jep"
-		allPackages = detected.JEPClones
-		return
-	}
-
-	// If ONLY Other Clones are detected
-	if detected.NormalRoblox == "" && len(detected.JEPClones) == 0 && len(detected.OtherClones) > 0 {
-		clientMode = "custom"
-		allPackages = detected.OtherClones
-		return
-	}
-
-	// Multiple options exist -> Show interactive selection menu!
-	type ClientOption struct {
-		Mode     string
-		Title    string
-		Desc     string
-		Packages []string
-	}
+	detected, _ := scanInstalledRobloxPackages()
 
 	for {
 		pad := getMenuLeftPad()
-		var opts []ClientOption
 		var rows []BoxRow
 
 		rows = append(rows,
 			BoxRow{
 				Type:        RowSubtitle,
-				CustomText:  "Multiple Roblox installations detected on this device.",
+				CustomText:  "Choose how you want to run Roblox on this device.",
 				CustomColor: White,
 			},
 			BoxRow{
 				Type:        RowSubtitle,
-				CustomText:  "Select which client or clone group you want to run.",
+				CustomText:  "Select single instance full-screen or multi-instance clones.",
 				CustomColor: Dim,
 			},
 			BoxRow{Type: RowSeparator},
 		)
 
+		// Option 1: Normal Roblox
+		normalNote := "Official Single Instance (Full Window)"
+		normalColor := White
 		if detected.NormalRoblox != "" {
-			opts = append(opts, ClientOption{
-				Mode:     "normal",
-				Title:    "Normal Roblox (Official Client)",
-				Desc:     "Single instance in standard full-screen window",
-				Packages: []string{detected.NormalRoblox},
-			})
-		}
-		if len(detected.JEPClones) > 0 {
-			opts = append(opts, ClientOption{
-				Mode:     "jep",
-				Title:    fmt.Sprintf("JEP Clones (%d Detected)", len(detected.JEPClones)),
-				Desc:     fmt.Sprintf("Multi-instance farming: %s ... %s", detected.JEPClones[0], detected.JEPClones[len(detected.JEPClones)-1]),
-				Packages: detected.JEPClones,
-			})
-		}
-		if len(detected.OtherClones) > 0 {
-			opts = append(opts, ClientOption{
-				Mode:     "custom",
-				Title:    fmt.Sprintf("Other / Custom Clones (%d Detected)", len(detected.OtherClones)),
-				Desc:     fmt.Sprintf("Packages: %s", strings.Join(detected.OtherClones, ", ")),
-				Packages: detected.OtherClones,
-			})
+			normalNote = "[Installed] Single Instance Full Window"
+			normalColor = Green
 		}
 
-		defaultOpt := 1
-		for i, opt := range opts {
-			color := White
-			if opt.Mode == "jep" {
-				defaultOpt = i + 1
-				color = Cyan
-			}
-			rows = append(rows,
-				BoxRow{
-					Type:       RowKeyValue,
-					Label:      fmt.Sprintf("[%d] %s", i+1, opt.Title),
-					LabelColor: color,
-					Value:      opt.Desc,
-					ValueColor: Dim,
-				},
-			)
+		rows = append(rows, BoxRow{
+			Type:       RowKeyValue,
+			Label:      "[1] Normal Roblox (Single Instance)  ",
+			LabelColor: normalColor,
+			Value:      normalNote,
+			ValueColor: normalColor,
+		})
+
+		// Option 2: Our Clones (JEP Clones)
+		jepNote := "Multi-Instance Farming Clones"
+		jepColor := Cyan
+		if len(detected.JEPClones) > 0 {
+			jepNote = fmt.Sprintf("[%d Installed] ★ Recommended", len(detected.JEPClones))
+			jepColor = Green
+		} else {
+			jepNote = "[Default 6 APKs] ★ Recommended"
+		}
+
+		rows = append(rows, BoxRow{
+			Type:       RowKeyValue,
+			Label:      "[2] Our Clones (JEP Clones)          ",
+			LabelColor: jepColor,
+			Value:      jepNote,
+			ValueColor: jepColor,
+		})
+
+		// Option 3: Other Clones
+		otherNote := "Custom / App Cloner / Other Clones"
+		otherColor := White
+		if len(detected.OtherClones) > 0 {
+			otherNote = fmt.Sprintf("[%d Detected: %s]", len(detected.OtherClones), strings.Join(detected.OtherClones, ", "))
+			otherColor = Green
+		} else {
+			otherNote = "Custom APK package names or cloner"
+			otherColor = Dim
+		}
+
+		rows = append(rows, BoxRow{
+			Type:       RowKeyValue,
+			Label:      "[3] Other Clones (Custom / App Cloner)",
+			LabelColor: White,
+			Value:      otherNote,
+			ValueColor: otherColor,
+		})
+
+		defaultOpt := 2
+		if detected.NormalRoblox != "" && len(detected.JEPClones) == 0 {
+			defaultOpt = 1
 		}
 
 		rows = append(rows,
@@ -4622,28 +4598,64 @@ func configureClientSelection() {
 			},
 		)
 
-		drawStepCard("ROBLOX CLIENT SELECTION", "Auto-Detected Roblox Installations", rows)
-		fmt.Printf("%s› Select Option [1-%d] (default: %d): %s", pad+White, len(opts), defaultOpt, NC)
+		drawStepCard("1. ROBLOX CLIENT SELECTION", "Normal Roblox vs JEP vs Other Clones", rows)
+		fmt.Printf("%s› Select Option [1-3] (default: %d): %s", pad+White, defaultOpt, NC)
 		input := strings.TrimSpace(readLine())
 		chosen := defaultOpt
 		if input != "" {
 			c, err := strconv.Atoi(input)
-			if err != nil || c < 1 || c > len(opts) {
-				drawAlertCard("ERROR", "[!] INVALID ENTRY", fmt.Sprintf("Please enter a number between 1 and %d.", len(opts)), "", "")
+			if err != nil || c < 1 || c > 3 {
+				drawAlertCard("ERROR", "[!] INVALID ENTRY", "Please enter a number between 1 and 3.", "", "")
 				time.Sleep(1500 * time.Millisecond)
 				continue
 			}
 			chosen = c
 		}
 
-		selectedOpt := opts[chosen-1]
-		clientMode = selectedOpt.Mode
-		allPackages = selectedOpt.Packages
-
-		if clientMode == "normal" {
+		switch chosen {
+		case 1:
+			clientMode = "normal"
+			allPackages = []string{"com.roblox.client"}
+			activePackages = []string{"com.roblox.client"}
 			cloneCount = 1
-			activePackages = []string{detected.NormalRoblox}
 			setDashboardStatus("Normal Roblox Selected (Full Window)", Green)
+
+		case 2:
+			clientMode = "jep"
+			if len(detected.JEPClones) > 0 {
+				allPackages = detected.JEPClones
+			} else {
+				allPackages = append([]string{}, defaultJEPPackages...)
+			}
+
+		case 3:
+			clientMode = "custom"
+			if len(detected.OtherClones) > 0 {
+				allPackages = detected.OtherClones
+			} else {
+				drawStepCard("CUSTOM CLONE PACKAGES", "Enter Custom Package Name(s)", []BoxRow{
+					{Type: RowSubtitle, CustomText: "Enter the Android package name of your clone(s).", CustomColor: White},
+					{Type: RowSubtitle, CustomText: "Separate multiple packages with comma.", CustomColor: Dim},
+					{Type: RowSubtitle, CustomText: "Example: com.roblox.client2, com.roblox.client3", CustomColor: Cyan},
+				})
+				fmt.Printf("%s› Package Name(s) (default: com.roblox.client2): %s", pad+White, NC)
+				pkgInput := strings.TrimSpace(readLine())
+				var customPkgs []string
+				if pkgInput == "" {
+					customPkgs = []string{"com.roblox.client2"}
+				} else {
+					for _, p := range strings.Split(pkgInput, ",") {
+						clean := strings.TrimSpace(p)
+						if clean != "" {
+							customPkgs = append(customPkgs, clean)
+						}
+					}
+				}
+				if len(customPkgs) == 0 {
+					customPkgs = []string{"com.roblox.client2"}
+				}
+				allPackages = customPkgs
+			}
 		}
 		break
 	}
